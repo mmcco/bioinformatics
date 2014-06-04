@@ -1,4 +1,4 @@
 bioinformatics
 ==============
 
-Code for my summer internship with Ben Langmead at Johns Hopkins Institute of Genetic Medicine.
+Code for my summer research internship with Dr. [Ben Langmead](http://www.cbcb.umd.edu/~langmead/) at the [Johns Hopkins Institute of Genetic Medicine](http://www.hopkinsmedicine.org/geneticmedicine/).
