@@ -1,4 +1,5 @@
 # WARNING: repeats[:10] used in Genome.__init__() for debugging
+# (only first ten repeats are minimized)
 
 from pprint import pprint
 from collections import defaultdict
