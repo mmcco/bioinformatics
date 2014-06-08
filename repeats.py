@@ -20,9 +20,6 @@ class Repeat:
         # initialize minimizers list, to make it clear we'll be populating it soon
         self.minimizers = None
 
-    def parseSeq(self, seq):
-        pass
-
 
 class Genome:
 
