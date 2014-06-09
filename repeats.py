@@ -15,7 +15,7 @@ class Repeat:
         # int-ize the reference coordinates
         self.ref_i, self.ref_f = int(self.ref_i), int(self.ref_f)
         # split on dash to give category heirarchy
-        self.rep_cl = self.rep_cl.split('/')
+        #self.rep_cl = self.rep_cl.split('/')
         
         # initialize minimizers list, to make it clear we'll be populating it soon
         self.minimizers = None
@@ -64,8 +64,11 @@ class Genome:
     # node definition for below tree
     class CategoryNode:
         def __init__(self, cat):
-            self.name = cat[-1]
-            self.parentName = "root" if len(cat) < 2 else cat[-2]
+            # nameList and name with the name as a list (implyig heirarchy) and as a string respectively
+            # a bit of a hack, but constantly joining and splitting takes time, and there aren't many cats
+            self.nameList = cat
+            self.name = '/'.join(cat)
+            self.parentName = None if self.name == "root" else "root" if len(cat) < 2 else cat[-2]
             # makeTree eventually populates this
             self.parent = None
             # makeTree eventually populates this
@@ -74,18 +77,19 @@ class Genome:
     # each node is a tuple containing the repeat category's name and its associated k-mers
     def makeTree(self):
         CategoryNode = self.CategoryNode    # for brevity
-        self.tree = CategoryNode([None, "root"])
+        self.tree = CategoryNode(["root"])
         self.catNodes = {"root": self.tree}
         otherID = 0    # a counter for handling the "Other" category below
         # generator of all repeat categories
         categories = (repeat.rep_cl for repeat in self.repeats)
         for cats in categories:
-            # must add every heirarchy level here, because parent cats don't always have their own repeats
-            # (e.g. there being a repeat in cat LINE/Jockey doesn't imply that there's one in cat LINE)
-            branch = (cats[:i+1] for i in xrange(len(cats)))
+            # split cats into heirarchy list
+            catList = cats.split('/')
+            # must add every heirarchy level to the tree, hence the branch loop
+            branch = (catList[:i+1] for i in xrange(len(catList)))
             for cat in branch:
                 # must remove duplicates manually because Python doesn't allow sets of lists
-                if cat[-1] in self.catNodes:
+                if '/'.join(cat) in self.catNodes:
                     continue
                 else:
                     # an ugly conditional to ensure that unknowns are not grouped as a category,
@@ -105,7 +109,7 @@ class Genome:
 
 
 def printTree(node, indent=0):
-    print ("\t" * indent) + node.name
+    print ("\t" * indent) + node.nameList[-1]
     for child in node.children:
         printTree(child, indent+1)
 
