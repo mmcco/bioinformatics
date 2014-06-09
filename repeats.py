@@ -14,8 +14,6 @@ class Repeat:
          self.rep_cl, self.rep_prior, self.rep_i, self.rep_f, self.unk) = line.split()
         # int-ize the reference coordinates
         self.ref_i, self.ref_f = int(self.ref_i), int(self.ref_f)
-        # split on dash to give category heirarchy
-        #self.rep_cl = self.rep_cl.split('/')
         
         # initialize minimizers list, to make it clear we'll be populating it soon
         self.minimizers = None
@@ -69,9 +67,8 @@ class Genome:
             self.nameList = cat
             self.name = '/'.join(cat)
             self.parentName = None if self.name == "root" else "root" if len(cat) < 2 else cat[-2]
-            # makeTree eventually populates this
+            # makeTree populates self.parent and self.children
             self.parent = None
-            # makeTree eventually populates this
             self.children = set()
 
     # each node is a tuple containing the repeat category's name and its associated k-mers
