@@ -1,8 +1,6 @@
-# WARNING: repeats[:10] used in Genome.__init__() for debugging
-# (only first ten repeats are minimized)
-
 from pprint import pprint
 from collections import defaultdict
+from operator import itemgetter
 
 
 class Repeat:
@@ -14,9 +12,6 @@ class Repeat:
          self.rep_cl, self.rep_prior, self.rep_i, self.rep_f, self.unk) = line.split()
         # int-ize the reference coordinates
         self.ref_i, self.ref_f = int(self.ref_i), int(self.ref_f)
-        
-        # initialize minimizers list, to make it clear we'll be populating it soon
-        self.minimizers = None
 
 
 class Genome:
@@ -36,6 +31,8 @@ class Genome:
         self.k = k
         # length of each minimizer
         self.m = m
+        # populated later by minimize()
+        self.kmers = []
 
         for filename in chromFilenames:
             with open(filename, "r") as chromFile:
@@ -45,19 +42,43 @@ class Genome:
                     else:
                         self.chromosomes[chromName] += line.rstrip()
 
-        for repeat in self.repeats[:10]:
-            kmerGen = self.makeKmerGen(self.chromosomes[repeat.refid][repeat.ref_i-1:repeat.ref_f])
-            repeat.minimizers = [self.minimize(kmer) for kmer in kmerGen]
-            #print repeat.minimizers
+        # kmers stored in a tuple: (kmer, minimizer offset, chromName)
+        self.minimize()
+        # use Kraken technique, sorting primarily on minimizer (lexically)...
+        # and secondarily on the k-mer itself
+        self.kmers.sort(key=itemgetter(1, 0))
+        with open("minimizers.out", "w") as outfile:
+            outfile.writelines((t[0] + ' ' + str(t[1]) for t in self.kmers))
 
     # returns a k-mer generator
-    def makeKmerGen(self, seq):
-        for i in xrange(len(seq) - self.k + 1):
-            yield seq[i:i + self.k]
+    def kmerGen(self):
+        # only first ten used!
+        for repeat in self.repeats[:5000]:
+            seq = self.chromosomes[repeat.refid][repeat.ref_i-1:repeat.ref_f]
+            for i in xrange(len(seq) - self.k + 1):
+                yield seq[i:i + self.k]
 
-    # returns m-long minimizer of k-mer, using generator list comprehension for efficiency
-    def minimize(self, kmer):
-        return min((kmer[i:i + self.m] for i in xrange(self.k - self.m + 1)))
+    # returns the index of m-long minimizer of k-mer, using generator list comprehension for efficiency
+    # could be done with a nifty one-line generator, but hand-coded for speed
+    def minimize(self):
+        temp = 0    # DELETE ME
+        for repeat in self.repeats:
+            temp += 1    # DELETE ME
+            chrom = self.chromosomes[repeat.refid]
+            start = repeat.ref_i - 1
+            end = repeat.ref_f
+            # loop through each of the repeat's kmers
+            for kStart in xrange(start, end - self.k + 1):
+                kEnd = kStart + self.k
+                min_offset = 0
+                curr_min = chrom[start:start+self.k]
+                # loop through each of the kmer's minimizers
+                for mStart in xrange(kStart, kEnd - self.m + 1):
+                    if chrom[mStart:mStart+self.m] < chrom[kStart+min_offset:kStart+min_offset+self.m]:
+                        min_offset = mStart - kStart
+                self.kmers.append((chrom[kStart:kEnd], min_offset, repeat.refid))
+                if temp % 1000 == 0 and kStart == start:
+                    print temp
 
     # node definition for below tree
     class CategoryNode:
@@ -116,4 +137,6 @@ if __name__ == "__main__":
     chromFilenames = ["chr2L.fa", "chr2LHet.fa", "chr2R.fa", "chr2RHet.fa", "chr3L.fa", "chr3LHet.fa", "chr3R.fa", "chr3RHet.fa", "chr4.fa", "chrM.fa", "chrUextra.fa", "chrU.fa", "chrX.fa", "chrXHet.fa", "chrYHet.fa"]
     genome = Genome(chromFilenames, "dm3.fa.out", 31, 13)
     genome.makeTree()
-    printTree(genome.tree)
+    #for kmer in genome.kmers[:100]:
+    #    print kmer[0], "    ---->    ", kmer[1]
+    #printTree(genome.tree)
