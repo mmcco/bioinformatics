@@ -69,6 +69,10 @@ func lines(str string) (numLines int, lines []string) {
         }
     }
     lines = strings.Split(str, "\n")
+    // drop the trailing newline's line if it's there
+    if strings.TrimSpace(lines[len(lines)-1]) == "" {
+        lines = lines[:len(lines)-1]
+    }
     return numLines, lines
 }
 
@@ -133,26 +137,41 @@ func parseMatchBares(matchLines []string) []MatchBare {
 
 
 func parseGenome(genomeName string) RefGenome {
-    var refGenome RefGenome
-    refGenome.Name = genomeName
+    refGenome := RefGenome{genomeName, make(map[string](map[string]string))}
     chromFileInfos, err := ioutil.ReadDir(genomeName)
     checkError(err)
-    // loop through every file in the reference directory
+    // used below to store the two keys for RefGenome.Chroms
     for i := 0; i < len(chromFileInfos); i++ {
         chromFilename := strings.Join([]string{genomeName, chromFileInfos[i].Name()}, "/")
-        fmt.Println("chromFilename:", chromFilename)
         // process the ref genome files (*.fa), not the repeat ref files (*.fa.out and *.fa.align)
         if strings.HasSuffix(chromFilename, ".fa") {
             rawSeqBytes, err := ioutil.ReadFile(chromFilename)
             checkError(err)
             rawSeq := string(rawSeqBytes)
             numLines, seqLines := lines(rawSeq)
-            for i := 0; i < numLines; i++ {
-                seqLine := seqLines[i]
+
+            // ultimately containes this file's sequences
+            seqMap := make(map[string]string)
+
+            // populate thisSeq with the first seq's name
+            thisSeq := append([]string(nil), strings.TrimSpace(seqLines[0])[1:])
+            for i := 1; i < numLines; i++ {
+                seqLine := strings.TrimSpace(seqLines[i])
                 if seqLine[0] == byte('>') {
-                    fmt.Println(seqLine[1:])
+                    // we now have a full seq, and can write it to the map
+                    seqMap[thisSeq[0]] = strings.Join(thisSeq[1:], "")
+                    thisSeq = []string{seqLine[1:]}
+                } else {
+                    thisSeq = append(thisSeq, seqLine)
                 }
             }
+            // add the remaining sequence
+            seqMap[thisSeq[0]] = strings.Join(thisSeq[1:], "")
+            // finally, we insert this map into the full map
+            chromName := chromFilename[len(genomeName)+1:len(chromFilename)-3]
+            // must initialize the inner map
+            refGenome.Chroms[chromName] = make(map[string]string)
+            refGenome.Chroms[chromName] = seqMap
         }
     }
     return refGenome
@@ -168,7 +187,12 @@ func main() {
     }
     genomeName := os.Args[1]
     refGenome := parseGenome(genomeName)
-    fmt.Println(refGenome)
+    for k, v := range refGenome.Chroms {
+        for k_, v_ := range v {
+            fmt.Printf("refGenome.Chroms[%s][%s] = %s . . . %s\n", k, k_, v_[:10], v_[len(v_)-10:])
+            fmt.Printf("len(refGenome.Chroms[%s][%s]) = %d\n\n", k, k_, len(v_))
+        }
+    }
 
     rawRepeatsBytes, err := ioutil.ReadFile("dm3/dm3.fa.out")
     checkError(err)
@@ -176,8 +200,8 @@ func main() {
 
     numLines, matchLines := lines(rawRepeats)
     fmt.Println("number of repeat file lines:", numLines)
-    // drop header and empty end line
-    matchLines = matchLines[3:len(matchLines)-1]
+    // drop header
+    matchLines = matchLines[3:]
     fmt.Println("number of parsed matchLines:", len(matchLines))
 
     matches := parseMatchBares(matchLines)
