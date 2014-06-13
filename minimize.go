@@ -1,4 +1,15 @@
-// A barebones (at the moment) Go script for parsing and minimizing repeats
+/*
+    A barebones (at the moment) Go script for parsing and minimizing repeats
+
+    The sole command line argument is the name of the reference genome (e.g. "dm3").
+
+    This script expects there to be a subdirectory of the current directory named after the reference genome used (e.g. "dm3") that contains the following files:
+        * a RepeatMasker library containing:
+            - the match library (e.g. "dm3.fa.out")
+            - the alignment information (e.g. "dm3.fa.align")
+        * one or more reference genome files in FASTA format with the ".fa" filetype
+*/
+
 
 package main
 
@@ -150,7 +161,7 @@ func parseGenome(genomeName string) RefGenome {
             rawSeq := string(rawSeqBytes)
             numLines, seqLines := lines(rawSeq)
 
-            // ultimately containes this file's sequences
+            // ultimately contains this file's sequences
             seqMap := make(map[string]string)
 
             // populate thisSeq with the first seq's name
@@ -178,6 +189,30 @@ func parseGenome(genomeName string) RefGenome {
 }
 
 
+func getMinimizer(kmer string, m int) int {
+    currMin := 0
+    for i := 0; i < len(kmer) - m + 1; i++ {
+        if kmer[i:i+m] < kmer[currMin:currMin+m] {
+            currMin = i
+        }
+    }
+    return currMin
+}
+
+
+//func minimize(match 
+
+
+func reverseComplement(seq string) string {
+    key := map[byte]byte{'a':'t', 't':'a', 'c':'g', 'g':'c', 'A':'T', 'T':'A', 'C':'G', 'G':'C'}
+    var revCompSeq []byte
+    for i := 0; i < len(seq); i++ {
+        revCompSeq = append(revCompSeq, key[seq[len(seq) - i - 1]])
+    }
+    return string(revCompSeq)
+}
+
+
 func main() {
 
     if len(os.Args) != 2 {
@@ -187,10 +222,29 @@ func main() {
     }
     genomeName := os.Args[1]
     refGenome := parseGenome(genomeName)
+
+    temp := strings.ToLower(refGenome.Chroms["chr2R"]["chr2R"])
+    for i := range temp {
+        ch := temp[i]
+        if ch != byte('a') && ch != byte('t') && ch != byte('g') && ch != byte('c') {
+            fmt.Printf("%d: %x\n", i, ch)
+        }
+    }
+    // shows N's
+    fmt.Println(temp[16668112:16668412])
+        
     for k, v := range refGenome.Chroms {
         for k_, v_ := range v {
             fmt.Printf("refGenome.Chroms[%s][%s] = %s . . . %s\n", k, k_, v_[:10], v_[len(v_)-10:])
-            fmt.Printf("len(refGenome.Chroms[%s][%s]) = %d\n\n", k, k_, len(v_))
+            fmt.Printf("len(refGenome.Chroms[%s][%s]) = %d\n", k, k_, len(v_))
+            temp := strings.ToLower(v_)
+            cnt := 0
+            for i := range temp {
+                if temp[i] == byte('a') || temp[i] == byte('t') || temp[i] == byte('g') || temp[i] == byte('c') {
+                    cnt++
+                }
+            }
+            fmt.Println("number of bases:", cnt, "\n")
         }
     }
 
@@ -207,4 +261,6 @@ func main() {
     matches := parseMatchBares(matchLines)
 
     fmt.Println("number of parsed matches", len(matches))
+    fmt.Println("getMinimizer(\"ataggatcacgac\", 4) =", getMinimizer("ataggatcacgac", 4))
+    fmt.Println("reverseComplement(\"aaAtGctACggT\") =", reverseComplement("aaAtGctACggT"))
 }
