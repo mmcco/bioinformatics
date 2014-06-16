@@ -6,6 +6,7 @@
 from pprint import pprint
 from collections import defaultdict
 from operator import itemgetter
+import itertools
 
 
 class Match:
@@ -16,7 +17,7 @@ class Match:
     #   For +-stand matches, the "remaining" value in reference to the repeat sequence is parenthesized.
     #   The "remaining" value in reference to the genome is always parenthesized.
 
-    def __init__(self, line):
+    def __init__(self, line, id):
         # self.swScore
         # self.pctdiv
         # self.pctdel
@@ -32,6 +33,9 @@ class Match:
         # self.repeatEnd  -  the ending sequence (exclusive) in the repeat consensus sequence
         # self.repeatRemains
         # self.repeatID - A numerical ID for the repeat type (starts at 1)
+
+        # a unique identifier we add
+        self.id = id
 
         (self.swScore, self.pctdiv, self.pctdel,
          self.pctins, self.chromName, self.chromStart,
@@ -57,6 +61,9 @@ class Match:
 
         self.repeatStart, self.repeatEnd = int(self.repeatStart), int(self.repeatEnd)
         self.repeatRemains, self.repeatID = int(self.repeatRemains), int(self.repeatID)
+
+        # populated by self.minimize
+        self.kmers = []
 
 
 class Chrom:
@@ -102,28 +109,36 @@ class CatNode:
 class Genome:
 
     # optional kmer library file to prevent need to recompute every time
-    def __init__(self, k, m, chromFilenames, matchFilename, kmerLibrary=None):
+    def __init__(self, k, m, chromFilepaths, matchFilepath, kmerLibrary=None):
         # we begin by loading the full reference genome
         # we store each chromosome as a Chrom instance, which contains a dict of the chroms sequences
         # yes, a defaultdict would be easier, but you can't nest dicts in Python
         self.chroms = dict()
-        for filename in chromFilenames:
-            with open(filename, "r") as chromFile:
-                chromName = filename[:-3]
+        for filepath in chromFilepaths:
+            with open(filepath, "r") as chromFile:
+                # take only the filename (e.g. "chr2L.fa") and then drop the ".fa"
+                chromName = filepath.split('/')[-1][:-3]
                 self.chroms[chromName] = Chrom(chromName)
                 for line in chromFile:
                     if line[0] == '>':
-                        seqName = line[1:].rstrip()
-                        seqs = self.chroms[chromName].seqs.setdefault(seqName, bytearray())
+                        seqName = line.strip()[1:]
+                        # seqs should never be redefined
+                        assert seqName not in self.chroms[chromName].seqs
+                        self.chroms[chromName].seqs[seqName] = bytearray()
                     else:
-                        self.chroms[chromName].seqs[seqName] += line.rstrip()
+                        self.chroms[chromName].seqs[seqName] += line.strip()
 
-        with open(matchFilename, "r") as matchFile:
+        for key in self.chroms.keys():
+            print key
+
+        with open(matchFilepath, "r") as matchFile:
             # skip the three header lines
             matchFile.readline()
             matchFile.readline()
             matchFile.readline()
-            self.matches = [Match(line) for line in matchFile]
+            # generator returning consecutive ints starting at 0
+            idGen = itertools.count()
+            self.matches = [Match(line, idGen.next()) for line in matchFile]
 
         # a list of all unique repeat types, indexed by ID
         self.repeats = []
@@ -165,18 +180,21 @@ class Genome:
         # length of each minimizer
         self.m = m
         # populated later by minimize()
-#        self.kmers = defaultdict(list)
+        self.kmers = defaultdict(list)
 
         # kmers stored in a tuple: (kmer, minimizer offset, chromName)
-#        if kmerLibrary:
-#            self.parseKmerLibrary(kmerLibrary)
-#        else:
-#            self.minimize()
+        if kmerLibrary:
+            self.parseKmerLibrary(kmerLibrary)
+        else:
+            self.minimize()
         # use Kraken technique, sorting primarily on minimizer (lexically)...
         # and secondarily on the k-mer itself
-#        self.kmers.sort(key=itemgetter(1, 0))
-#        with open("minimizers.out", "w") as outfile:
-#            outfile.writelines((t[0] + ' ' + str(t[1]) + '\n' for t in self.kmers))
+        self.kmers.sort(key=itemgetter(1, 0))
+        with open("minimizers.out", "w") as outfile:
+            for match in self.matches:
+                outfile.write(">" + str(match.id) + "\n")
+                for kmer in match.kmers:
+                    outfile.write(str(kmer[0]) + " " + str(kmer[1]) + " " + str(if kmer[2] then 1 else 0))
 
     # kmer libraries are stored with the name of each repeat prepended with '>',
     # with each kmer-offset pair below on its own line:
@@ -192,8 +210,8 @@ class Genome:
                 if line[0] == '>':
                     name = line[1:]
                 else:
-                    kmer, minOffset = line.split()
-                    self.kmers[name].append((kmer, int(minOffset)))
+                    kmer, minOffset, isRevComp = line.split()
+                    self.kmers[name].append((kmer, int(minOffset), isRevComp))
 
     ### TEMPORARILY DEPRECATED FOR SPEED
     # returns a k-mer generator
@@ -207,29 +225,40 @@ class Genome:
     @staticmethod
     def reverseComplement(seq):
         key = {
-            'a': 't', 'A': 'T', 't': 'a', 'T': 'A',
-            'c': 'g', 'C': 'G', 'g': 'c', 'G': 'C'
+            ord('a'): ord('t'), ord('A'): ord('T'), ord('t'): ord('a'), ord('T'): ord('A'),
+            ord('c'): ord('g'), ord('C'): ord('G'), ord('g'): ord('c'), ord('G'): ord('C')
             }
-        return ''.join([key[len(seq)-i-1] for i in range(len(seq))])
+        return bytearray([key[seq[len(seq)-i-1]] for i in range(len(seq))])
 
-    # returns the index of m-long minimizer of k-mer, using generator list comprehension for efficiency
+    # store the indexes of the m-long minimizers of each, using generator list comprehension for efficiency
     # could be done with a nifty one-line generator, but hand-coded for speed
     def minimize(self):
         for match in self.matches:
-            chrom = self.chromosomes[match.refid]
-            kmers = []
+            # !!! this is dubious - it's unclear whether the sole match's sole sequence identifier represents a file (chrom) or a sequence (seq)
+            # for our test case, dm3, the two are the same
+            seq = self.chroms[match.chromName].seqs[match.chromName]
             start = match.chromStart - 1
             end = match.chromEnd
             # loop through each of the match's kmers
             for kStart in xrange(start, end - self.k + 1):
                 kEnd = kStart + self.k
                 minOffset = 0
-                curr_min = chrom[start:start+self.k]
+                isRevComp = False
+                currMin = seq[kStart:kStart+self.k]
                 # loop through each of the kmer's minimizers
                 for mStart in xrange(kStart, kEnd - self.m + 1):
-                    if chrom[mStart:mStart+self.m] < chrom[kStart+minOffset:kStart+minOffset+self.m]:
+                    testMin = seq[mStart:mStart+self.m]
+                    if testMin < currMin:
                         minOffset = mStart - kStart
-                self.kmers[ref_cl].append((chrom[kStart:kEnd], minOffset, match.refid))
+                        currMin = testMin
+                        isRevComp = False
+                    revCompMin = self.reverseComplement(seq[mStart:mStart+self.m])
+                    if revCompMin < currMin:
+                        minOffset = mStart - kStart
+                        currMin = revCompMin
+                        isRevComp = True
+                # self.kmers format: kmer offset, minimizer offset, minimizer is in reverse complement
+                match.kmers.append((kStart, minOffset, isRevComp))
 
 
 def printTree(node, indent=0):
@@ -241,5 +270,5 @@ def printTree(node, indent=0):
 if __name__ == "__main__":
 
     chromFilenames = map(lambda x: "dm3/" + x, ["chr2L.fa", "chr2LHet.fa", "chr2R.fa", "chr2RHet.fa", "chr3L.fa", "chr3LHet.fa", "chr3R.fa", "chr3RHet.fa", "chr4.fa", "chrM.fa", "chrUextra.fa", "chrU.fa", "chrX.fa", "chrXHet.fa", "chrYHet.fa"])
-    genome = Genome(31, 13, chromFilenames, "dm3/dm3.fa.out", "minimizers.out")
+    genome = Genome(31, 13, chromFilenames, "dm3/dm3.fa.out")
     printTree(genome.tree)
