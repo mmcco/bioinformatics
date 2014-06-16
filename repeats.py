@@ -194,7 +194,7 @@ class Genome:
             for match in self.matches:
                 outfile.write(">" + str(match.id) + "\n")
                 for kmer in match.kmers:
-                    outfile.write(str(kmer[0]) + " " + str(kmer[1]) + " " + str(if kmer[2] then 1 else 0))
+                    outfile.write(str(kmer[0]) + " " + str(kmer[1]) + " " + str(int(kmer[2])))
 
     # kmer libraries are stored with the name of each repeat prepended with '>',
     # with each kmer-offset pair below on its own line:
