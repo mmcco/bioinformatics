@@ -1,4 +1,4 @@
-# complement support needs to be added
+# doesn't currently use Kraken's XOR technique
 
 # For the purposes of this code, a "match" is a specific instance of a type of repeat, while a "repeat" is a type of repeat
 # Additionally, "category" is abbreviated to "cat"
@@ -105,6 +105,12 @@ class CatNode:
         self.parent = None
         self.children = set()
 
+    def pathToRoot(self, root):
+        path = [self]
+        while path[-1] != root:
+            path.append(path[-1].parent)
+        return path
+
 
 class Genome:
 
@@ -175,6 +181,7 @@ class Genome:
                 catNode.parent = self.catNodes[catNode.parentName]
                 catNode.parent.children.add(catNode)
 
+        assert m <= k
         # length of each k-mer
         self.k = k
         # length of each minimizer
@@ -225,8 +232,11 @@ class Genome:
     @staticmethod
     def reverseComplement(seq):
         key = {
-            ord('a'): ord('t'), ord('A'): ord('T'), ord('t'): ord('a'), ord('T'): ord('A'),
-            ord('c'): ord('g'), ord('C'): ord('G'), ord('g'): ord('c'), ord('G'): ord('C')
+            ord('a'): ord('t'), ord('A'): ord('T'),
+            ord('t'): ord('a'), ord('T'): ord('A'),
+            ord('c'): ord('g'), ord('C'): ord('G'),
+            ord('g'): ord('c'), ord('G'): ord('C'),
+            ord('n'): ord('n'), ord('N'): ord('N')
             }
         return bytearray([key[seq[len(seq)-i-1]] for i in range(len(seq))])
 
@@ -234,31 +244,73 @@ class Genome:
     # could be done with a nifty one-line generator, but hand-coded for speed
     def minimize(self):
         for match in self.matches:
-            # !!! this is dubious - it's unclear whether the sole match's sole sequence identifier represents a file (chrom) or a sequence (seq)
+            # !!! this is dubious - it's unclear whether each match's sole sequence identifier represents a file (chrom) or a sequence (seq)
             # for our test case, dm3, the two are the same
             seq = self.chroms[match.chromName].seqs[match.chromName]
             start = match.chromStart - 1
             end = match.chromEnd
-            # loop through each of the match's kmers
-            for kStart in xrange(start, end - self.k + 1):
-                kEnd = kStart + self.k
-                minOffset = 0
-                isRevComp = False
-                currMin = seq[kStart:kStart+self.k]
-                # loop through each of the kmer's minimizers
-                for mStart in xrange(kStart, kEnd - self.m + 1):
-                    testMin = seq[mStart:mStart+self.m]
-                    if testMin < currMin:
-                        minOffset = mStart - kStart
-                        currMin = testMin
+
+            # find the first kmer's minimizer
+            minOffset = 0
+            isRevComp = False
+            currMin = seq[start:start+self.k]
+            for mStart in xrange(start, start - self.m + 1):
+                testMin = seq[mStart:mStart+self.m]
+                if testMin < currMin:
+                    minOffset = mStart - start
+                    currMin = testMin
+                    isRevComp = False
+                revCompMin = self.reverseComplement(seq[mStart:mStart+self.m])
+                if revCompMin < currMin:
+                    minOffset = mStart - start
+                    currMin = revCompMin
+                    isRevComp = True
+            match.kmers.append((start, minOffset, isRevComp))
+
+            # generate the remaining kmers' minimizers using the previous calculations when possible
+            for kStart in xrange(start + 1, end - self.k + 1):
+                # if the last minimizer isn't in this kmer's frame, we have to start from scratch
+                if minOffset == 0:
+                    # must copy this code from above for speed
+                    for mStart in xrange(kStart, kStart - self.m + 1):
+                        testMin = seq[mStart:mStart+self.m]
+                        if testMin < currMin:
+                            minOffset = mStart - kStart
+                            currMin = testMin
+                            isRevComp = False
+                        revCompMin = self.reverseComplement(seq[mStart:mStart+self.m])
+                        if revCompMin < currMin:
+                            minOffset = mStart - kStart
+                            currMin = revCompMin
+                            isRevComp = True
+                else:
+                    # test the minimizer new to this kmer, in comparison to the last...
+                    newMin = seq[kStart+self.m:kStart+(2*self.m)]
+                    if newMin < currMin:
+                        minOffset = kStart + self.m
+                        currMin = newMin
                         isRevComp = False
-                    revCompMin = self.reverseComplement(seq[mStart:mStart+self.m])
-                    if revCompMin < currMin:
-                        minOffset = mStart - kStart
-                        currMin = revCompMin
-                        isRevComp = True
+                    # ...and its reverse complement
+                    newRevCompMin = self.reverseComplement(seq[kStart+self.m:kStart+(2*self.m)])
+                    if newRevCompMin < currMin:
+                        minOffset = kStart + self.m
+                        currMin = newMin
+                        isRevComp = False
+                    # in all other cases, the kmer's minimizer is the same as that of the last
+                    else:
+                        minOffset -= 1
+
                 # self.kmers format: kmer offset, minimizer offset, minimizer is in reverse complement
                 match.kmers.append((kStart, minOffset, isRevComp))
+
+
+    def findLCA(self, catNodeA, catNodeB):
+        pathA = catNodeA.pathToRoot(self.root)
+        pathB = catNodeB.pathToRoot(self.root)
+        # ensures that we use the lowest ancestor
+        for catNode in pathA:
+            if catNode in pathB:
+                return catNode
 
 
 def printTree(node, indent=0):
