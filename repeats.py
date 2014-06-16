@@ -62,9 +62,6 @@ class Match:
         self.repeatStart, self.repeatEnd = int(self.repeatStart), int(self.repeatEnd)
         self.repeatRemains, self.repeatID = int(self.repeatRemains), int(self.repeatID)
 
-        # populated by self.minimize
-        self.kmers = []
-
 
 class Chrom:
 
@@ -186,22 +183,19 @@ class Genome:
         self.k = k
         # length of each minimizer
         self.m = m
-        # populated later by minimize()
-        self.kmers = defaultdict(list)
 
-        # kmers stored in a tuple: (kmer, minimizer offset, chromName)
+        # associates kmer with a tuple: (minimizer offset, is reverse complement, LCA repeat ID)
+        self.kmers = dict()
         if kmerLibrary:
             self.parseKmerLibrary(kmerLibrary)
         else:
             self.minimize()
-        # use Kraken technique, sorting primarily on minimizer (lexically)...
-        # and secondarily on the k-mer itself
-        self.kmers.sort(key=itemgetter(1, 0))
-        with open("minimizers.out", "w") as outfile:
-            for match in self.matches:
-                outfile.write(">" + str(match.id) + "\n")
-                for kmer in match.kmers:
-                    outfile.write(str(kmer[0]) + " " + str(kmer[1]) + " " + str(int(kmer[2])))
+            # use Kraken technique, sorting primarily on minimizer (lexically)...
+            # and secondarily on the k-mer itself
+            #self.kmers.sort(key=itemgetter(1, 0))
+            with open("minimizers.out", "w") as outfile:
+                for kmer, vals in self.kmers.items():
+                    outfile.write(kmer + " " + str(vals[0]) + " " + str(vals[1]) + " " + str(int(vals[2])) + " " + str(vals[3].id))
 
     # kmer libraries are stored with the name of each repeat prepended with '>',
     # with each kmer-offset pair below on its own line:
@@ -214,11 +208,8 @@ class Genome:
     def parseKmerLibrary(self, filename):
         with open(filename, "r") as kmerFile:
             for line in kmerFile:
-                if line[0] == '>':
-                    name = line[1:]
-                else:
-                    kmer, minOffset, isRevComp = line.split()
-                    self.kmers[name].append((kmer, int(minOffset), isRevComp))
+                kmer, minOffset, isRevComp, lcaID = line.split()
+                self.kmers[kmer] = (int(minOffset), bool(isRevComp), self.repeats[int(lcaID)])
 
     ### TEMPORARILY DEPRECATED FOR SPEED
     # returns a k-mer generator
@@ -251,6 +242,7 @@ class Genome:
             end = match.chromEnd
 
             # find the first kmer's minimizer
+            kmer = seq[start:start+self.k]
             minOffset = 0
             isRevComp = False
             currMin = seq[start:start+self.k]
@@ -265,22 +257,29 @@ class Genome:
                     minOffset = mStart - start
                     currMin = revCompMin
                     isRevComp = True
-            match.kmers.append((start, minOffset, isRevComp))
+
+            repeat = self.repeats[match.repeatID]
+            if kmer in self.kmers:
+                minOffset_, isRevComp_, lca = self.kmers[kmer]
+                # the only thing that should change is the LCA
+                assert minOffset == minOffset_ and isRevComp == isRevComp_
+                self.kmers[kmer] = (minOffset_, isRevComp_, self.findLCA(lca, repeat))
+            else:
+                self.kmers[kmer] = (minOffset, isRevComp, repeat)
 
             # generate the remaining kmers' minimizers using the previous calculations when possible
-            for kStart in xrange(start + 1, end - self.k + 1):
+            for kmer in (seq[start+i:start+i+self.k] for i in xrange(1, self.m + 1)):
                 # if the last minimizer isn't in this kmer's frame, we have to start from scratch
                 if minOffset == 0:
                     # must copy this code from above for speed
-                    for mStart in xrange(kStart, kStart - self.m + 1):
-                        testMin = seq[mStart:mStart+self.m]
+                    for testMin in (kmer[i:i+self.m] for i in xrange(0, self.k - self.m + 1)):
                         if testMin < currMin:
-                            minOffset = mStart - kStart
+                            minOffset = i
                             currMin = testMin
                             isRevComp = False
-                        revCompMin = self.reverseComplement(seq[mStart:mStart+self.m])
+                        revCompMin = self.reverseComplement(testMin)
                         if revCompMin < currMin:
-                            minOffset = mStart - kStart
+                            minOffset = i
                             currMin = revCompMin
                             isRevComp = True
                 else:
@@ -300,8 +299,13 @@ class Genome:
                     else:
                         minOffset -= 1
 
-                # self.kmers format: kmer offset, minimizer offset, minimizer is in reverse complement
-                match.kmers.append((kStart, minOffset, isRevComp))
+                if kmer in self.kmers:
+                    minOffset_, isRevComp_, lca = self.kmers[kmer]
+                    # the only thing that should change is the LCA
+                    assert minOffset == minOffset_ and isRevComp == isRevComp_
+                    self.kmers[kmer] = (minOffset_, isRevComp_, self.findLCA(lca, repeat))
+                else:
+                    self.kmers[kmer] = (minOffset, isRevComp, repeat)
 
 
     def findLCA(self, catNodeA, catNodeB):
