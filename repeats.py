@@ -1,4 +1,4 @@
-# WARNING!!! This script it currently under development and may be buggy or broken.
+# WARNING!!! This script is currently under development and may be buggy or broken.
 
 # This script currently takes one command line argument: the path to the data directory, which is also the name of the reference genome.
 # The data directory is assumed ot contain the reference genome in FASTA format. These files are assumed to be the only ones in the directory with the suffix ".fa".
