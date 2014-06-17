@@ -1,5 +1,3 @@
-// needs "Other" handling in tree formation
-
 /*
     A barebones (at the moment) Go script for parsing and minimizing repeats
 
@@ -80,7 +78,14 @@ type Repeat struct {
     ID int64
     Class []string
     FullName string
-    parent *Repeat
+}
+
+
+type ClassNode struct {
+    Name string
+    Class []string
+    Parent *ClassNode
+    Children []*ClassNode
 }
 
 
@@ -267,7 +272,7 @@ func max(a int64, b int64) int64 {
 }
 
 
-func (repeat Repeat) print() {
+func (repeat Repeat) Print() {
     for j := range repeat.Class {
         for j_ := 0; j_ < j; j_++ {
             fmt.Printf("\t")
@@ -278,6 +283,79 @@ func (repeat Repeat) print() {
 }
 
 
+func (classNode *ClassNode) PrintTree() {
+    classNode.printTreeRec(0)
+}
+
+func (classNode *ClassNode) printTreeRec(indent int) {
+    for i := 0; i < indent; i++ {
+        fmt.Printf("\t")
+    }
+    if len(classNode.Class) == 0 {
+        fmt.Println("root")
+    } else {
+        fmt.Println(classNode.Name)
+        //fmt.Printf("%s\n", classNode.Class[indent])
+    }
+    for i := range classNode.Children {
+        classNode.Children[i].printTreeRec(indent+1)
+    }
+}
+
+
+func classSliceContains(a_s []*ClassNode, b *ClassNode) bool {
+    for i := range a_s {
+        if a_s[i] == b {
+            return true
+        }
+    }
+    return false
+}
+
+// returns a pointer to the root of the tree a map of ClassNode names to ClassNode pointers
+func GetClassTree(repeats []Repeat) (*ClassNode, map[string](*ClassNode)) {
+    // mapping to pointers allows us to make references (i.e. pointers) to values
+    classNodes := make(map[string](*ClassNode))
+    // would be prettier if expanded
+    classRoot := &ClassNode{}
+    classNodes["root"] = classRoot
+    classRoot.Name = "root"
+    // all but Name is left nil
+    for i := 1; i < len(repeats); i++ {
+        // ignore the null indices
+        if repeats[i].ID != 0 {
+            // process every heirarchy level (e.g. for "DNA/LINE/TiGGER", process "DNA", then "DNA/LINE", then "DNA/LINE/TiGGER")
+            if repeats[i].FullName == "root" {
+                fmt.Println(repeats[i])
+            }
+            for j := 1; j <= len(repeats[i].Class); j++ {
+                thisClass := repeats[i].Class[:j]
+                thisClassName := strings.Join(thisClass, "/")
+                var keyExists bool
+                _, keyExists = classNodes[thisClassName]
+                if !keyExists {
+                    thisClassNode := ClassNode{}
+                    classNodes[thisClassName] = &thisClassNode
+                    thisClassNode.Name = thisClassName
+                    classNodes[thisClassName].Class = thisClass
+                    // first case handles primary classes, as classRoot is implicit and not listed in thisClass
+                    if j == 1 {
+                        classNodes[thisClassName].Parent = classRoot
+                    } else {
+                        classNodes[thisClassName].Parent = classNodes[strings.Join(thisClass[:len(thisClass)-1], "/")]
+                    }
+                    parent := classNodes[thisClassName].Parent
+                    if parent.Children == nil {
+                        parent.Children = []*ClassNode{}
+                    }
+                    parent.Children = append(parent.Children, classNodes[thisClassName])
+                }
+            }
+        }
+    }
+    return classRoot, classNodes
+}
+
 func main() {
 
     if len(os.Args) != 2 {
@@ -287,7 +365,9 @@ func main() {
     }
     genomeName := os.Args[1]
     refGenome := parseGenome(genomeName)
+    fmt.Println("number of chromosomes parsed:", len(refGenome.Chroms))
 
+    /*
     fmt.Println()
     for k, v := range refGenome.Chroms {
         for k_, v_ := range v {
@@ -296,6 +376,7 @@ func main() {
         }
         fmt.Println()
     }
+    */
 
     rawMatchesBytes, err := ioutil.ReadFile("dm3/dm3.fa.out")
     checkError(err)
@@ -307,7 +388,6 @@ func main() {
     fmt.Println("number of parsed matchLines (excluding header):", len(matchLines))
     matches := parseMatches(matchLines)
     fmt.Println("number of parsed matches:", len(matches))
-    fmt.Printf("\"%d\"\n", matches[0].RepeatID)
 
     // we now populate a list of unique repeat types
     // repeats are stored in the below slice, indexed by their ID
@@ -319,22 +399,35 @@ func main() {
     }
     repeats = make([]Repeat, repeatsSize)
     // the real repeats begin at 1, we store root at 0
-    repeats[0] = Repeat{0, []string{"root"}, "root", nil}
+    repeats[0] = Repeat{0, []string{"root"}, "root"}
+    //root := &repeats[0]
 
+    // maps a repeat's category to its ID
+    repeatMap := make(map[string](int64))
     // we now assign the actual repeats
-    for i := range matches {
+    for i := 1; i < len(matches); i++ {
         id := matches[i].RepeatID
         // don't bother overwriting
-        if id != repeats[id].ID {
+        if repeats[id].ID == 0 {
             repeats[id].ID = id
             repeats[id].Class = append(strings.Split(matches[i].RepeatClass, "/"), matches[i].RepeatName)
+            // "Other" or "Unknown" are meaningless categories, so all its children should be connected to root
+            // !!! we should probably check in the future if "Other" or "Unknown" appear at ancestry levels other than the first
+            // that all repeats descend from root is implicit - root is excluded from the slice
+            if repeats[id].Class[0] == "Other" || repeats[id].Class[0] == "Unknown" {
+                repeats[id].Class = repeats[id].Class[1:]
+            } else {
+                repeats[id].Class = repeats[id].Class
+            }
             repeats[id].FullName = strings.Join([]string{matches[i].RepeatClass, matches[i].RepeatName}, "/")
         }
+        repeatMap[strings.Join(repeats[id].Class, "/")] = id
     }
 
-    for i := 0; i < 15; i++ {
-        repeats[i].print()
-    }
+    classRoot, classNodes := GetClassTree(repeats)
+
+    classRoot.PrintTree()
+    fmt.Println("number of ClassNodes:", len(classNodes))
 
     // matchBares := parseMatchBares(matchLines)
 
