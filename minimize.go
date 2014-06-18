@@ -29,6 +29,8 @@ import ("fmt"
         "strings"
         "strconv"
         "reflect"
+        "bufio"
+        "sort"
         //"math"
 )
 
@@ -114,6 +116,11 @@ type ClassNode struct {
 }
 
 
+// type synonym, necessary to implement interfaces (e.g. sort)
+type Minimizer []*Kmer
+type Minimizers map[string]Minimizer
+
+
 func checkError(err error) {
     if err != nil {
         log.Fatal(err)
@@ -140,7 +147,8 @@ func lines(str string) (numLines int, lines []string) {
 
 func ParseMatches(genomeName string) []Match {
     // !!! Below string literal is a temporary solution!
-    rawMatchesBytes, err := ioutil.ReadFile("dm3/dm3.fa.out")
+    filepath := strings.Join([]string{genomeName, "/", genomeName, ".fa.out"}, "")
+    rawMatchesBytes, err := ioutil.ReadFile(filepath)
     checkError(err)
     rawMatches := string(rawMatchesBytes)
     _, matchLines := lines(rawMatches)
@@ -329,11 +337,11 @@ func getMinimizer(kmer string, m uint8) (uint8, bool) {
     for i = 0; i <= uint8(len(kmer)) - m; i++ {
         currMin = kmer[minOffset:minOffset+m]
         possMin = kmer[i:i+m]
-        if seqCompare(currMin, possMin) == 1 {
+        if SeqCompare(currMin, possMin) == 1 {
             minOffset = i
             isRevComp = false
         }
-        if seqCompare(currMin, revComp(possMin)) == 1 {
+        if SeqCompare(currMin, revComp(possMin)) == 1 {
             minOffset = i
             isRevComp = true
         }
@@ -482,7 +490,7 @@ func (classTree ClassTree) getLCA(cnA, cnB *ClassNode) *ClassNode {
 // Currently, it uses simple lexicographic ordering
 // It returns -1 if a < b, 0 if a == b, and 1 if a > b
 // It also assumes that the two sequences are of equal length, ignoring any hanging bases. In the future, maybe an error should be reported for this.
-func seqCompare(a, b string) int8 {
+func SeqCompare(a, b string) int8 {
     for i := 0; i < min(len(a), len(b)); i++ {
         if a[i] < b[i] {
             return -1
@@ -554,11 +562,11 @@ func Minimize(refGenome RefGenome, matches []Match, classTree ClassTree, k uint8
                     minOffset, isRevComp = getMinimizer(kmer, m)
                 } else {
                     // otherwise there are only two options to overtake the previous minimizer: the last possible minimizer, and its reverse complement
-                    if seqCompare(currMin, possMin) == 1 {
+                    if SeqCompare(currMin, possMin) == 1 {
                         minOffset = x
                         isRevComp = false
                     }
-                    if seqCompare(currMin, revComp(possMin)) == 1 {
+                    if SeqCompare(currMin, revComp(possMin)) == 1 {
                         minOffset = x
                         isRevComp = true
                     }
@@ -570,7 +578,7 @@ func Minimize(refGenome RefGenome, matches []Match, classTree ClassTree, k uint8
                     if classTree.ClassNodes[matches[i].FullName] == nil {
                         fmt.Println("match has nil ClassNode:", matches[i].FullName)
                         for y := 0; y < len(matches[i].RepeatClass); y++ {
-                            fmt.Printf("location of ClassNodes['%s']: %p\n", strings.Join(matches[i].RepeatClass[0:y+1], ""), classTree.ClassNodes[strings.Join(matches[i].RepeatClass[0:y+1], "")])
+                            fmt.Printf("location of ClassNodes['%s']: %p\n", strings.Join(matches[i].RepeatClass[0:y+1], "/"), classTree.ClassNodes[strings.Join(matches[i].RepeatClass[0:y+1], "/")])
                         }
                     }
                     // this shows a bit of a wart in the data structures - do we want each match to store a pointer to its ClassNode?
@@ -587,6 +595,62 @@ func Minimize(refGenome RefGenome, matches []Match, classTree ClassTree, k uint8
         }
     }
     return kmers
+}
+
+
+// needed for sort.Interface
+func (minimizer Minimizer) Len() int {
+    return len(minimizer)
+}
+
+
+func (minimizer Minimizer) Swap(i, j int) {
+    minimizer[i], minimizer[j] = minimizer[j], minimizer[i]
+}
+
+
+// needed for sort.Interface
+func (minimizer Minimizer) Less(i, j int) bool {
+    return SeqCompare(minimizer[i].Kmer, minimizer[j].Kmer) == -1
+}
+
+
+func boolToInt(a bool) int {
+    if a {
+        return 1
+    } else {
+        return 0
+    }
+}
+
+
+func WriteMinimizers(filename string, minimizers Minimizers) {
+    outfile, err := os.Create(filename)
+    checkError(err)
+    writer := bufio.NewWriter(outfile)
+
+    for thisMin, kmers := range minimizers {
+        _, err = writer.WriteRune('>')
+        checkError(err)
+        _, err = writer.WriteString(thisMin)
+        checkError(err)
+        _, err = writer.WriteRune('\n')
+        checkError(err)
+        sort.Sort(kmers)
+        for i := range kmers {
+            _, err = writer.WriteString(strings.Join([]string{kmers[i].Kmer, string(kmers[i].MinOffset), string(boolToInt(kmers[i].IsRevComp))}, " "))
+            checkError(err)
+            _, err = writer.WriteRune('\n')
+            checkError(err)
+            for repeatID, count := range kmers[i].Count {
+                _, err = writer.WriteRune('\t')
+                checkError(err)
+                _, err = writer.WriteString(strings.Join([]string{string(repeatID), string(count)}, " "))
+                checkError(err)
+            }
+        }
+    }
+    outfile.Close()
 }
 
 
