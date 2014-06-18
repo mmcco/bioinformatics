@@ -1,6 +1,8 @@
 /*
     WARNING!!! This program is currently under development and may be buggy or broken.
 
+    Must change kmer map index from kmer to minimizer.
+
     Still needs full support for below data spec.
 
     Int sizes should be reviewed for memory efficiency.
@@ -45,8 +47,7 @@ type Match struct {
     SeqEnd int64
     SeqRemains int64
     IsRevComp bool
-    RepeatName string
-    RepeatClass string
+    RepeatClass []string
     RepeatStart int64
     RepeatEnd int64
     RepeatRemains int64
@@ -57,6 +58,7 @@ type Match struct {
 }
 
 
+/*
 // a minimal Match implementation for minimizing
 type MatchBare struct {
     SeqName string
@@ -67,6 +69,7 @@ type MatchBare struct {
     RepeatClass string
     RepeatID int64
 }
+*/
 
 
 type RefGenome struct {
@@ -87,6 +90,7 @@ type ClassTree struct {
 
 
 type Kmer struct {
+    // should likely be renamed "Seq" or "KmerSeq"
     Kmer string
     MinOffset uint8
     IsRevComp bool
@@ -176,8 +180,7 @@ func ParseMatches(genomeName string) []Match {
         match.SeqRemains, err = strconv.ParseInt(rawVals[7], 10, 64)
         checkError(err)
         // match.IsComplement, rawVals[8], moved above
-        match.RepeatName = strings.TrimSpace(rawVals[9])
-        match.RepeatClass = strings.TrimSpace(rawVals[10])
+        match.RepeatClass = append(strings.Split(strings.TrimSpace(rawVals[10]), "/"), strings.TrimSpace(rawVals[9]))
         match.RepeatStart, err = strconv.ParseInt(rawVals[11], 10, 64)
         checkError(err)
         match.RepeatEnd, err = strconv.ParseInt(rawVals[12], 10, 64)
@@ -197,6 +200,13 @@ func ParseMatches(genomeName string) []Match {
         // that way, we can use them without modification in slices
         match.SeqStart--
         match.RepeatStart--
+
+
+        // "Other" and "Unknown" classes are heirarchically meaningless and really just mean "root", so we remove them
+        if match.RepeatClass[0] == "Other" || match.RepeatClass[0] == "Unknown" {
+            match.RepeatClass = match.RepeatClass[1:]
+        }
+        match.FullName = strings.Join(match.RepeatClass, "/")
 
         matches = append(matches, match)
     }
@@ -296,16 +306,14 @@ func GetRepeats(matches []Match) []Repeat {
         // don't bother overwriting
         if repeats[id].ID == 0 {
             repeats[id].ID = id
-            repeats[id].Class = append(strings.Split(matches[i].RepeatClass, "/"), matches[i].RepeatName)
+            repeats[id].Class = matches[i].RepeatClass
             // "Other" or "Unknown" are meaningless categories, so all its children should be connected to root
             // !!! we should probably check in the future if "Other" or "Unknown" appear at ancestry levels other than the first
             // that all repeats descend from root is implicit - root is excluded from the slice
-            if repeats[id].Class[0] == "Other" || repeats[id].Class[0] == "Unknown" {
-                repeats[id].Class = repeats[id].Class[1:]
-            } else {
-                repeats[id].Class = repeats[id].Class
-            }
-            repeats[id].FullName = strings.Join([]string{matches[i].RepeatClass, matches[i].RepeatName}, "/")
+            //if repeats[id].Class[0] == "Other" || repeats[id].Class[0] == "Unknown" {
+            //    repeats[id].Class = repeats[id].Class[1:]
+            //}
+            repeats[id].FullName = matches[i].FullName
         }
         repeatMap[strings.Join(repeats[id].Class, "/")] = id
     }
@@ -499,52 +507,83 @@ func (refGenome RefGenome) PrintChromInfo() {
 }
 
 
-func Minimize(refGenome RefGenome, matches []Match, classTree ClassTree, k uint8, m uint8) map[string]*Kmer {
+// returns a pointer to the supplied kmer with the supplied minimizer in the supplied map
+// if it does not exist, nil is returned
+func getKmer(kmers map[string]([]*Kmer), minimizer string, kmer string) *Kmer {
+    for i := range kmers[minimizer] {
+        if kmers[minimizer][i].Kmer == kmer {
+            return kmers[minimizer][i]
+        }
+    }
+    return nil
+}
+
+
+func Minimize(refGenome RefGenome, matches []Match, classTree ClassTree, k uint8, m uint8) map[string]([]*Kmer) {
     // maps to *Kmer, as we did with ClassNodes, because of this golang foible: https://code.google.com/p/go/issues/detail?id=3117
-    kmers := make(map[string]*Kmer)
+    kmers := make(map[string]([]*Kmer))
+    // because it's a uint8, k can be at most 255 (the same, of course, goes for m)
+    var start, end int64
+    // minOffset holds the offset of the current minimizer
+    var x, minOffset uint8
+    var seq, currMin, possMin, kmer string
+    var isRevComp bool
+    var kmerStruct *Kmer
     for i := range matches {
-        start, end := matches[i].SeqStart, matches[i].SeqEnd
+        // skip the blanks
+        if matches[i].RepeatID == 0 {
+            continue
+        }
+        start, end = matches[i].SeqStart, matches[i].SeqEnd
         // !!! the reference genome is two-dimensional, but RepeatMasker only supplies one sequence name
         // we resolve this ambiguity with the assumption that each chromosome file contains only one sequence
         // this holds true, at least in dm3
-        seq := refGenome.Chroms[matches[i].SeqName][matches[i].SeqName][start:end]
-        // minOffset holds the offset of the current minimizer
-        // because it's a uint8, k can be at most 255 (the same, of course, goes for m)
-        // we have to calculate the first one from scratch
-        kmer := seq[:k]
-        minOffset, isRevComp := getMinimizer(kmer, m)
-        var j uint8
-        for j = 0; j < k - m + 1; j++ {
-            // below is a potential performance sink - it can be optimized out later if necessary
-            kmer = seq[j:j+k]
-            // holds the current minimizer
-            currMin := kmer[:m]
-            // in some cases we can use most of the calculations from the previous kmer
-            // when the previous minimizer isn't in the current kmer, though, we have to start from scratch
-            if minOffset < j {
-                minOffset, isRevComp = getMinimizer(kmer, m)
-            } else {
-                // otherwise there are only two options to overtake the previous minimizer: the last possible minimizer, and its reverse complement
-                if seqCompare(currMin, kmer[k-m:]) == 1 {
-                    minOffset = j - m
-                    isRevComp = false
+        seq = refGenome.Chroms[matches[i].SeqName][matches[i].SeqName][start:end]
+        for j := 0; j <= len(seq) - int(k); j++ {
+            kmer = seq[j:j+int(k)]
+            // fmt.Printf("kmer: seq[%d:%d] = %s\n", j, j+int(k), kmer)    // DELETE ME
+            // we have to calculate the first minimizer from scratch
+            minOffset, isRevComp = getMinimizer(kmer, m)
+            // x is the start index of the current possMin, the minimizer we're testing on this loop
+            for x = 0; x <= k - m; x++ {
+                // below is a potential performance sink - it can be optimized out later if necessary
+                // fmt.Printf("possMin: kmer[%d:%d]\n", x, (x+m))    // DELETE ME
+                possMin = kmer[x:x+m]
+                // fmt.Println("minOffset:", minOffset)    // DELETE ME
+                // holds the current minimizer
+                currMin = kmer[minOffset:minOffset+m]
+                // in some cases we can use most of the calculations from the previous kmer
+                // when the previous minimizer isn't in the current kmer, though, we have to start from scratch
+                if minOffset < x {
+                    minOffset, isRevComp = getMinimizer(kmer, m)
+                } else {
+                    // otherwise there are only two options to overtake the previous minimizer: the last possible minimizer, and its reverse complement
+                    if seqCompare(currMin, possMin) == 1 {
+                        minOffset = x
+                        isRevComp = false
+                    }
+                    if seqCompare(currMin, revComp(possMin)) == 1 {
+                        minOffset = x
+                        isRevComp = true
+                    }
                 }
-                if seqCompare(currMin, revComp(kmer[k-m:])) == 1 {
-                    minOffset = j - m
-                    isRevComp = true
+                // if the kmers already there, we just update its LCA and increment its counter
+                currMin = kmer[minOffset:minOffset+m]
+                kmerStruct = getKmer(kmers, currMin, kmer)
+                if kmerStruct != nil {
+                    // this shows a bit of a wart in the data structures - do we want each match to store a pointer to its ClassNode?
+                    if classTree.ClassNodes[matches[i].FullName] == nil {
+                        fmt.Println("match has nil ClassNode:", matches[i].FullName)
+                    }
+                    kmerStruct.LCA = classTree.getLCA(kmerStruct.LCA, classTree.ClassNodes[matches[i].FullName])
+                    kmerStruct.Count[matches[i].RepeatID]++
+                } else {
+                    kmers[currMin] = append(kmers[currMin], &Kmer{kmer,
+                                                                  minOffset,
+                                                                  isRevComp,
+                                                                  classTree.ClassNodes[matches[i].FullName],
+                                                                  map[int64]int32{matches[i].RepeatID: 1}})
                 }
-            }
-            // if the kmers already there, we just update its LCA and increment its counter
-            if _, exists := kmers[kmer]; exists {
-                // this shows a bit of a wart in the data structures - do we want each match to store a pointer to its ClassNode?
-                kmers[kmer].LCA = classTree.getLCA(kmers[kmer].LCA, classTree.ClassNodes[matches[i].FullName])
-                kmers[kmer].Count[matches[i].RepeatID]++
-            } else {
-                kmers[kmer] = &Kmer{kmer,
-                                    minOffset,
-                                    isRevComp,
-                                    classTree.ClassNodes[matches[i].FullName],
-                                    map[int64]int32{matches[i].RepeatID: 1}}
             }
         }
     }
