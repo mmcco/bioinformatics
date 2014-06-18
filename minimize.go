@@ -314,8 +314,8 @@ func GetRepeats(matches []Match) []Repeat {
             //    repeats[id].Class = repeats[id].Class[1:]
             //}
             repeats[id].FullName = matches[i].FullName
+            repeatMap[repeats[id].FullName] = id
         }
-        repeatMap[strings.Join(repeats[id].Class, "/")] = id
     }
     return repeats
 }
@@ -430,10 +430,10 @@ func GetClassTree(repeats []Repeat) ClassTree {
     for i := 1; i < len(repeats); i++ {
         // ignore the null indices
         if repeats[i].ID != 0 {
-            // process every heirarchy level (e.g. for "DNA/LINE/TiGGER", process "DNA", then "DNA/LINE", then "DNA/LINE/TiGGER")
             if repeats[i].FullName == "root" {
                 fmt.Println(repeats[i])
             }
+            // process every heirarchy level (e.g. for "DNA/LINE/TiGGER", process "DNA", then "DNA/LINE", then "DNA/LINE/TiGGER")
             for j := 1; j <= len(repeats[i].Class); j++ {
                 thisClass := repeats[i].Class[:j]
                 thisClassName := strings.Join(thisClass, "/")
@@ -530,10 +530,6 @@ func Minimize(refGenome RefGenome, matches []Match, classTree ClassTree, k uint8
     var isRevComp bool
     var kmerStruct *Kmer
     for i := range matches {
-        // skip the blanks
-        if matches[i].RepeatID == 0 {
-            continue
-        }
         start, end = matches[i].SeqStart, matches[i].SeqEnd
         // !!! the reference genome is two-dimensional, but RepeatMasker only supplies one sequence name
         // we resolve this ambiguity with the assumption that each chromosome file contains only one sequence
@@ -571,10 +567,13 @@ func Minimize(refGenome RefGenome, matches []Match, classTree ClassTree, k uint8
                 currMin = kmer[minOffset:minOffset+m]
                 kmerStruct = getKmer(kmers, currMin, kmer)
                 if kmerStruct != nil {
-                    // this shows a bit of a wart in the data structures - do we want each match to store a pointer to its ClassNode?
                     if classTree.ClassNodes[matches[i].FullName] == nil {
                         fmt.Println("match has nil ClassNode:", matches[i].FullName)
+                        for y := 0; y < len(matches[i].RepeatClass); y++ {
+                            fmt.Printf("location of ClassNodes['%s']: %p\n", strings.Join(matches[i].RepeatClass[0:y+1], ""), classTree.ClassNodes[strings.Join(matches[i].RepeatClass[0:y+1], "")])
+                        }
                     }
+                    // this shows a bit of a wart in the data structures - do we want each match to store a pointer to its ClassNode?
                     kmerStruct.LCA = classTree.getLCA(kmerStruct.LCA, classTree.ClassNodes[matches[i].FullName])
                     kmerStruct.Count[matches[i].RepeatID]++
                 } else {
