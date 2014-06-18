@@ -1,4 +1,6 @@
 /*
+    WARNING!!! This program is currently under development and may be buggy or broken.
+
     A barebones (at the moment) Go script for parsing and minimizing repeats
 
     The sole command line argument is the name of the reference genome (e.g. "dm3").
@@ -20,6 +22,7 @@ import ("fmt"
         "io/ioutil"
         "strings"
         "strconv"
+        "reflect"
         //"math"
 )
 
@@ -110,6 +113,7 @@ func lines(str string) (numLines int, lines []string) {
     }
     return numLines, lines
 }
+
 
 func parseMatches(matchLines []string) []Match {
     var matches []Match
@@ -242,9 +246,6 @@ func getMinimizer(kmer string, m int) int {
 }
 
 
-//func minimize(match 
-
-
 func reverseComplement(seq string) string {
     var revCompSeq []byte
     for i := 0; i < len(seq); i++ {
@@ -265,6 +266,15 @@ func reverseComplement(seq string) string {
 
 func max(a int64, b int64) int64 {
     if a > b {
+        return a
+    } else {
+        return b
+    }
+}
+
+
+func min(a, b int) int {
+    if a < b {
         return a
     } else {
         return b
@@ -356,6 +366,22 @@ func GetClassTree(repeats []Repeat) (*ClassNode, map[string](*ClassNode)) {
     return classRoot, classNodes
 }
 
+
+func GetLCA(classNodes map[string](*ClassNode), cnA, cnB *ClassNode) *ClassNode {
+    for i := min(len(cnA.Class), len(cnB.Class)); i > 0; i-- {
+        if reflect.DeepEqual(cnA.Class[:i], cnB.Class[:i]) {
+            // we walk back to the LCA's pointer through the parent fields
+            lca := cnA
+            for j := 0; j < len(cnA.Class) - i; i++ {
+                lca = lca.Parent
+            }
+            return lca
+        }
+    }
+    return classNodes["root"]
+}
+
+
 func main() {
 
     if len(os.Args) != 2 {
@@ -428,6 +454,8 @@ func main() {
 
     classRoot.PrintTree()
     fmt.Println("number of ClassNodes:", len(classNodes))
+
+    fmt.Println("GetLCA(classNodes, classNodes['DNA/P/Galileo_DM'], classNodes['DNA/TcMar-Pogo/POGO']):", GetLCA(classNodes, classNodes["DNA/P/Galileo_DM"], classNodes["DNA/TcMar-Pogo/POGO"]))
 
     // matchBares := parseMatchBares(matchLines)
 
