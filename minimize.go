@@ -1,6 +1,8 @@
 /*
     WARNING!!! This program is currently under development and may be buggy or broken.
 
+    Still needs full support for below data spec.
+
     A barebones (at the moment) Go script for parsing and minimizing repeats
 
     The sole command line argument is the name of the reference genome (e.g. "dm3").
@@ -9,7 +11,7 @@
         * a RepeatMasker library containing:
             - the match library (e.g. "dm3.fa.out")
             - the alignment information (e.g. "dm3.fa.align")
-        * one or more reference genome files in FASTA format with the ".fa" filetype
+        * one or more reference genome files in FASTA format with the suffix ".fa"
 */
 
 
@@ -69,6 +71,14 @@ type RefGenome struct {
 }
 
 
+type ClassTree struct {
+    // maps all class names to a pointer to their struct
+    ClassNodes map[string](*ClassNode)
+    // a pointer to the the class tree's root, used for recursive descent etc.
+    Root *ClassNode
+}
+
+
 type Kmer struct {
     Kmer string
     MinOffset int
@@ -99,6 +109,7 @@ func checkError(err error) {
 }
 
 
+// returns the number of lines and a slice of the lines
 func lines(str string) (numLines int, lines []string) {
     numLines = 0
     for i := 0; i < len(str); i++ {
@@ -115,8 +126,16 @@ func lines(str string) (numLines int, lines []string) {
 }
 
 
-func parseMatches(matchLines []string) []Match {
+func ParseMatches(genomeName string) []Match {
+    // !!! Below string literal is a temporary solution!
+    rawMatchesBytes, err := ioutil.ReadFile("dm3/dm3.fa.out")
+    checkError(err)
+    rawMatches := string(rawMatchesBytes)
+    _, matchLines := lines(rawMatches)
+    // drop header
+    matchLines = matchLines[3:]
     var matches []Match
+
     for i := 0; i < len(matchLines); i++ {
         rawVals := strings.Fields(matchLines[i])
         var match Match
@@ -132,6 +151,7 @@ func parseMatches(matchLines []string) []Match {
             rawVals[13] = rawVals[13][1:len(rawVals[13])-1]
         }
 
+        // everything in this block is just vanilla trimming, converting, and error checking
         match.SW_Score, err = strconv.ParseInt(rawVals[0], 10, 64)
         checkError(err)
         match.PercDiv, err = strconv.ParseFloat(rawVals[1], 64)
@@ -165,8 +185,14 @@ func parseMatches(matchLines []string) []Match {
                 match.RepeatRemains, match.RepeatStart, match.RepeatRemains + (match.RepeatEnd - match.RepeatStart)
         }
 
+        // decrement match.SeqStart and match.RepeatStart so that they work from a start index of 0 rather than 1
+        // that way, we can use them without modification in slices
+        match.SeqStart--
+        match.RepeatStart--
+
         matches = append(matches, match)
     }
+
     return matches
 }
 
@@ -193,11 +219,15 @@ func parseMatchBares(matchLines []string) []MatchBare {
 }
 
 
-func parseGenome(genomeName string) RefGenome {
-    refGenome := RefGenome{genomeName, make(map[string](map[string]string))}
+func ParseGenome(genomeName string) RefGenome {
+    // most fields will be assigned separately
+    refGenome := RefGenome{}
+    refGenome.Name = genomeName
+
     chromFileInfos, err := ioutil.ReadDir(genomeName)
     checkError(err)
     // used below to store the two keys for RefGenome.Chroms
+    refGenome.Chroms = make(map[string](map[string]string))
     for i := 0; i < len(chromFileInfos); i++ {
         chromFilename := strings.Join([]string{genomeName, chromFileInfos[i].Name()}, "/")
         // process the ref genome files (*.fa), not the repeat ref files (*.fa.out and *.fa.align)
@@ -231,7 +261,43 @@ func parseGenome(genomeName string) RefGenome {
             refGenome.Chroms[chromName] = seqMap
         }
     }
+
     return refGenome
+}
+
+
+func GetRepeats(matches []Match) []Repeat {
+    // we now populate a list of unique repeat types
+    // repeats are stored in the below slice, indexed by their ID
+    // we first determine the necessary size of the slice - we can't use append because matches are not sorted by repeatID
+    var repeatsSize int64 = 1
+    for i := range matches {
+        repeatsSize = max(repeatsSize, matches[i].RepeatID + 1)
+    }
+    repeats := make([]Repeat, repeatsSize)
+
+    // maps a repeat's category to its ID
+    repeatMap := make(map[string](int64))
+    // we now assign the actual repeats
+    for i := 0; i < len(matches); i++ {
+        id := matches[i].RepeatID
+        // don't bother overwriting
+        if repeats[id].ID == 0 {
+            repeats[id].ID = id
+            repeats[id].Class = append(strings.Split(matches[i].RepeatClass, "/"), matches[i].RepeatName)
+            // "Other" or "Unknown" are meaningless categories, so all its children should be connected to root
+            // !!! we should probably check in the future if "Other" or "Unknown" appear at ancestry levels other than the first
+            // that all repeats descend from root is implicit - root is excluded from the slice
+            if repeats[id].Class[0] == "Other" || repeats[id].Class[0] == "Unknown" {
+                repeats[id].Class = repeats[id].Class[1:]
+            } else {
+                repeats[id].Class = repeats[id].Class
+            }
+            repeats[id].FullName = strings.Join([]string{matches[i].RepeatClass, matches[i].RepeatName}, "/")
+        }
+        repeatMap[strings.Join(repeats[id].Class, "/")] = id
+    }
+    return repeats
 }
 
 
@@ -293,8 +359,8 @@ func (repeat Repeat) Print() {
 }
 
 
-func (classNode *ClassNode) PrintTree() {
-    classNode.printTreeRec(0)
+func (classTree ClassTree) PrintTree() {
+    classTree.Root.printTreeRec(0)
 }
 
 func (classNode *ClassNode) printTreeRec(indent int) {
@@ -323,13 +389,13 @@ func classSliceContains(a_s []*ClassNode, b *ClassNode) bool {
 }
 
 // returns a pointer to the root of the tree a map of ClassNode names to ClassNode pointers
-func GetClassTree(repeats []Repeat) (*ClassNode, map[string](*ClassNode)) {
+func GetClassTree(repeats []Repeat) ClassTree {
     // mapping to pointers allows us to make references (i.e. pointers) to values
     classNodes := make(map[string](*ClassNode))
     // would be prettier if expanded
-    classRoot := &ClassNode{}
-    classNodes["root"] = classRoot
-    classRoot.Name = "root"
+    root := &ClassNode{}
+    classNodes["root"] = root
+    root.Name = "root"
     // all but Name is left nil
     for i := 1; i < len(repeats); i++ {
         // ignore the null indices
@@ -348,9 +414,9 @@ func GetClassTree(repeats []Repeat) (*ClassNode, map[string](*ClassNode)) {
                     classNodes[thisClassName] = &thisClassNode
                     thisClassNode.Name = thisClassName
                     classNodes[thisClassName].Class = thisClass
-                    // first case handles primary classes, as classRoot is implicit and not listed in thisClass
+                    // first case handles primary classes, as root is implicit and not listed in thisClass
                     if j == 1 {
-                        classNodes[thisClassName].Parent = classRoot
+                        classNodes[thisClassName].Parent = root
                     } else {
                         classNodes[thisClassName].Parent = classNodes[strings.Join(thisClass[:len(thisClass)-1], "/")]
                     }
@@ -363,7 +429,7 @@ func GetClassTree(repeats []Repeat) (*ClassNode, map[string](*ClassNode)) {
             }
         }
     }
-    return classRoot, classNodes
+    return ClassTree{classNodes, root}
 }
 
 
@@ -382,18 +448,24 @@ func GetLCA(classNodes map[string](*ClassNode), cnA, cnB *ClassNode) *ClassNode 
 }
 
 
-func main() {
-
-    if len(os.Args) != 2 {
-        fmt.Println(len(os.Args), "args supplied")
-        fmt.Println("arg error - usage: ./minimize <reference genome dir>")
-        os.Exit(1)
+// The logic for determining the minimizer
+// Currently, it uses simple lexicographic ordering
+// It returns -1 if a < b, 0 if a == b, and 1 if a > b
+// It also assumes that the two sequences are of equal length, ignoring any hanging bases. In the future, maybe an error should be reported for this.
+func seqCompare(a, b string) int8 {
+    for i := 0; i < min(len(a), len(b)); i++ {
+        if a[i] < b[i] {
+            return -1
+        }
+        if a[i] > b[i] {
+            return 1
+        }
     }
-    genomeName := os.Args[1]
-    refGenome := parseGenome(genomeName)
-    fmt.Println("number of chromosomes parsed:", len(refGenome.Chroms))
+    return 0
+}
 
-    /*
+
+func (refGenome RefGenome) PrintChromInfo() {
     fmt.Println()
     for k, v := range refGenome.Chroms {
         for k_, v_ := range v {
@@ -402,61 +474,72 @@ func main() {
         }
         fmt.Println()
     }
-    */
+}
 
-    rawMatchesBytes, err := ioutil.ReadFile("dm3/dm3.fa.out")
-    checkError(err)
-    rawMatches := string(rawMatchesBytes)
-    numLines, matchLines := lines(rawMatches)
-    // drop header
-    fmt.Println("number of parsed matchLines (including header):", numLines)
-    matchLines = matchLines[3:]
-    fmt.Println("number of parsed matchLines (excluding header):", len(matchLines))
-    matches := parseMatches(matchLines)
-    fmt.Println("number of parsed matches:", len(matches))
 
-    // we now populate a list of unique repeat types
-    // repeats are stored in the below slice, indexed by their ID
-    var repeats []Repeat
-    // we first determine the necessary size of the slice - we can't use append because matches are not sorted by repeatID
-    var repeatsSize int64 = 1
+func Minimize(refGenome RefGenome, matches []Match, classTree ClassTree, k uint8, m uint8) []Kmer {
+    kmers := []Kmer{}
     for i := range matches {
-        repeatsSize = max(repeatsSize, matches[i].RepeatID + 1)
-    }
-    repeats = make([]Repeat, repeatsSize)
-    // the real repeats begin at 1, we store root at 0
-    repeats[0] = Repeat{0, []string{"root"}, "root"}
-    //root := &repeats[0]
-
-    // maps a repeat's category to its ID
-    repeatMap := make(map[string](int64))
-    // we now assign the actual repeats
-    for i := 1; i < len(matches); i++ {
-        id := matches[i].RepeatID
-        // don't bother overwriting
-        if repeats[id].ID == 0 {
-            repeats[id].ID = id
-            repeats[id].Class = append(strings.Split(matches[i].RepeatClass, "/"), matches[i].RepeatName)
-            // "Other" or "Unknown" are meaningless categories, so all its children should be connected to root
-            // !!! we should probably check in the future if "Other" or "Unknown" appear at ancestry levels other than the first
-            // that all repeats descend from root is implicit - root is excluded from the slice
-            if repeats[id].Class[0] == "Other" || repeats[id].Class[0] == "Unknown" {
-                repeats[id].Class = repeats[id].Class[1:]
+        start, end := matches[i].SeqStart, matches[i].SeqEnd
+        // !!! the reference genome is two-dimensional, but RepeatMasker only supplies one sequence name
+        // we resolve this ambiguity with the assumption that each chromosome file contains only one sequence
+        // this holds true, at least in dm3
+        seq := refGenome.Chroms[matches[i].SeqName][matches[i].SeqName][start:end]
+        // holds the offset of the current minimizer
+        // because it's an int8, k can be at most 127 (the same, of course, goes for m)
+        // we have to calculate the first one from scratch
+        minOffset := getMinimizer(seq[:k], m)
+        for j := 0; j < k - m + 1; j++ {
+            // below is a potential performance sink - it can be optimized out later if necessary
+            // kmer := seq[j:j+k]
+            // holds the current minimizer
+            currMin := seq[minOffset:minOffset+m]
+            // in some cases we can use most of the calculations from the previous kmer
+            // when the previous minimizer isn't in the current kmer, though, we have to start from scratch
+            if minOffset < j {
+                minOffset, isRevComp := getMinimizer(seq[j:j+k], m)
             } else {
-                repeats[id].Class = repeats[id].Class
+                // otherwise there are only two options to overtake the previous minimizer: the last possible minimizer, and its reverse complement
+                if seqCompare(currMin, seq[j-m:j]) == 1 {
+                    minOffset := j - m
+                    isRevComp = false
+                }
+                if seqCompare(currMin, revComp(seq[j-m:j])) == 1{
+                    minOffset := j - m
+                    isRevComp = true
+                }
             }
-            repeats[id].FullName = strings.Join([]string{matches[i].RepeatClass, matches[i].RepeatName}, "/")
-        }
-        repeatMap[strings.Join(repeats[id].Class, "/")] = id
+            // if the kmers already there, we just update its LCA and increment its counter
+            if thisKmer, exists := kmers[kmer]
     }
+    return kmers
+}
 
-    classRoot, classNodes := GetClassTree(repeats)
 
-    classRoot.PrintTree()
-    fmt.Println("number of ClassNodes:", len(classNodes))
+func main() {
 
-    fmt.Println("GetLCA(classNodes, classNodes['DNA/P/Galileo_DM'], classNodes['DNA/TcMar-Pogo/POGO']):", GetLCA(classNodes, classNodes["DNA/P/Galileo_DM"], classNodes["DNA/TcMar-Pogo/POGO"]))
+    if len(os.Args) != 2 {
+        fmt.Println(len(os.Args), "args supplied")
+        fmt.Println("arg error - usage: ./minimize <reference genome dir>")
+        os.Exit(1)
+    }
+    genomeName := os.Args[1]
+    refGenome := ParseGenome(genomeName)
+    matches := ParseMatches(genomeName)
+    repeats := GetRepeats(matches)
+    classTree := GetClassTree(repeats)
 
+    // below are testing statements
+
+    fmt.Println("number of chromosomes parsed:", len(refGenome.Chroms))
+
+    classTree.PrintTree()
+    fmt.Println("number of ClassNodes:", len(classTree.ClassNodes))
+
+    fmt.Println("GetLCA(classTree.ClassNodes, classTree.ClassNodes['DNA/P/Galileo_DM'], classTree.ClassNodes['DNA/TcMar-Pogo/POGO']):", GetLCA(classTree.ClassNodes, classTree.ClassNodes["DNA/P/Galileo_DM"], classTree.ClassNodes["DNA/TcMar-Pogo/POGO"]))
+
+    fmt.Println("min(5, 7):", min(5, 7))
+    fmt.Println("max(int64(5), int64(7)):", max(int64(5), int64(7)))
     // matchBares := parseMatchBares(matchLines)
 
     fmt.Println("getMinimizer(\"ataggatcacgac\", 4) =", getMinimizer("ataggatcacgac", 4))
