@@ -3,6 +3,8 @@
 
     Still needs full support for below data spec.
 
+    Int sizes should be reviewed for memory efficiency.
+
     A barebones (at the moment) Go script for parsing and minimizing repeats
 
     The sole command line argument is the name of the reference genome (e.g. "dm3").
@@ -49,6 +51,9 @@ type Match struct {
     RepeatEnd int64
     RepeatRemains int64
     RepeatID int64
+
+    // not in parsed data file
+    FullName string
 }
 
 
@@ -73,6 +78,8 @@ type RefGenome struct {
 
 type ClassTree struct {
     // maps all class names to a pointer to their struct
+    // chosen because of this foible in golang: https://code.google.com/p/go/issues/detail?id=3117
+    // may be changed in the future
     ClassNodes map[string](*ClassNode)
     // a pointer to the the class tree's root, used for recursive descent etc.
     Root *ClassNode
@@ -81,9 +88,10 @@ type ClassTree struct {
 
 type Kmer struct {
     Kmer string
-    MinOffset int
+    MinOffset uint8
     IsRevComp bool
-    LCA *Repeat
+    LCA *ClassNode
+    Count map[int64]int32
 }
 
 
@@ -197,6 +205,9 @@ func ParseMatches(genomeName string) []Match {
 }
 
 
+/*
+// !!! WARNING - this function is currently obsolete
+// it may be used later for spacial locality
 func parseMatchBares(matchLines []string) []MatchBare {
     var matches []MatchBare
     for i := 0; i < len(matchLines); i++ {
@@ -217,6 +228,7 @@ func parseMatchBares(matchLines []string) []MatchBare {
     }
     return matches
 }
+*/
 
 
 func ParseGenome(genomeName string) RefGenome {
@@ -301,18 +313,28 @@ func GetRepeats(matches []Match) []Repeat {
 }
 
 
-func getMinimizer(kmer string, m int) int {
-    currMin := 0
-    for i := 0; i < len(kmer) - m + 1; i++ {
-        if kmer[i:i+m] < kmer[currMin:currMin+m] {
-            currMin = i
+func getMinimizer(kmer string, m uint8) (uint8, bool) {
+    var minOffset uint8 = 0
+    isRevComp := false
+    var currMin, possMin string
+    var i uint8
+    for i = 0; i <= uint8(len(kmer)) - m; i++ {
+        currMin = kmer[minOffset:minOffset+m]
+        possMin = kmer[i:i+m]
+        if seqCompare(currMin, possMin) == 1 {
+            minOffset = i
+            isRevComp = false
+        }
+        if seqCompare(currMin, revComp(possMin)) == 1 {
+            minOffset = i
+            isRevComp = true
         }
     }
-    return currMin
+    return minOffset, isRevComp
 }
 
 
-func reverseComplement(seq string) string {
+func revComp(seq string) string {
     var revCompSeq []byte
     for i := 0; i < len(seq); i++ {
             switch seq[len(seq) - i - 1] {
@@ -433,7 +455,7 @@ func GetClassTree(repeats []Repeat) ClassTree {
 }
 
 
-func GetLCA(classNodes map[string](*ClassNode), cnA, cnB *ClassNode) *ClassNode {
+func (classTree ClassTree) getLCA(cnA, cnB *ClassNode) *ClassNode {
     for i := min(len(cnA.Class), len(cnB.Class)); i > 0; i-- {
         if reflect.DeepEqual(cnA.Class[:i], cnB.Class[:i]) {
             // we walk back to the LCA's pointer through the parent fields
@@ -444,7 +466,7 @@ func GetLCA(classNodes map[string](*ClassNode), cnA, cnB *ClassNode) *ClassNode 
             return lca
         }
     }
-    return classNodes["root"]
+    return classTree.ClassNodes["root"]
 }
 
 
@@ -477,40 +499,54 @@ func (refGenome RefGenome) PrintChromInfo() {
 }
 
 
-func Minimize(refGenome RefGenome, matches []Match, classTree ClassTree, k uint8, m uint8) []Kmer {
-    kmers := []Kmer{}
+func Minimize(refGenome RefGenome, matches []Match, classTree ClassTree, k uint8, m uint8) map[string]*Kmer {
+    // maps to *Kmer, as we did with ClassNodes, because of this golang foible: https://code.google.com/p/go/issues/detail?id=3117
+    kmers := make(map[string]*Kmer)
     for i := range matches {
         start, end := matches[i].SeqStart, matches[i].SeqEnd
         // !!! the reference genome is two-dimensional, but RepeatMasker only supplies one sequence name
         // we resolve this ambiguity with the assumption that each chromosome file contains only one sequence
         // this holds true, at least in dm3
         seq := refGenome.Chroms[matches[i].SeqName][matches[i].SeqName][start:end]
-        // holds the offset of the current minimizer
-        // because it's an int8, k can be at most 127 (the same, of course, goes for m)
+        // minOffset holds the offset of the current minimizer
+        // because it's a uint8, k can be at most 255 (the same, of course, goes for m)
         // we have to calculate the first one from scratch
-        minOffset := getMinimizer(seq[:k], m)
-        for j := 0; j < k - m + 1; j++ {
+        kmer := seq[:k]
+        minOffset, isRevComp := getMinimizer(kmer, m)
+        var j uint8
+        for j = 0; j < k - m + 1; j++ {
             // below is a potential performance sink - it can be optimized out later if necessary
-            // kmer := seq[j:j+k]
+            kmer = seq[j:j+k]
             // holds the current minimizer
-            currMin := seq[minOffset:minOffset+m]
+            currMin := kmer[:m]
             // in some cases we can use most of the calculations from the previous kmer
             // when the previous minimizer isn't in the current kmer, though, we have to start from scratch
             if minOffset < j {
-                minOffset, isRevComp := getMinimizer(seq[j:j+k], m)
+                minOffset, isRevComp = getMinimizer(kmer, m)
             } else {
                 // otherwise there are only two options to overtake the previous minimizer: the last possible minimizer, and its reverse complement
-                if seqCompare(currMin, seq[j-m:j]) == 1 {
-                    minOffset := j - m
+                if seqCompare(currMin, kmer[k-m:]) == 1 {
+                    minOffset = j - m
                     isRevComp = false
                 }
-                if seqCompare(currMin, revComp(seq[j-m:j])) == 1{
-                    minOffset := j - m
+                if seqCompare(currMin, revComp(kmer[k-m:])) == 1 {
+                    minOffset = j - m
                     isRevComp = true
                 }
             }
             // if the kmers already there, we just update its LCA and increment its counter
-            if thisKmer, exists := kmers[kmer]
+            if _, exists := kmers[kmer]; exists {
+                // this shows a bit of a wart in the data structures - do we want each match to store a pointer to its ClassNode?
+                kmers[kmer].LCA = classTree.getLCA(kmers[kmer].LCA, classTree.ClassNodes[matches[i].FullName])
+                kmers[kmer].Count[matches[i].RepeatID]++
+            } else {
+                kmers[kmer] = &Kmer{kmer,
+                                    minOffset,
+                                    isRevComp,
+                                    classTree.ClassNodes[matches[i].FullName],
+                                    map[int64]int32{matches[i].RepeatID: 1}}
+            }
+        }
     }
     return kmers
 }
@@ -528,6 +564,8 @@ func main() {
     matches := ParseMatches(genomeName)
     repeats := GetRepeats(matches)
     classTree := GetClassTree(repeats)
+    minimizers := Minimize(refGenome, matches, classTree, 31, 15)
+    fmt.Println("number of kmers minimized:", len(minimizers))
 
     // below are testing statements
 
@@ -536,12 +574,12 @@ func main() {
     classTree.PrintTree()
     fmt.Println("number of ClassNodes:", len(classTree.ClassNodes))
 
-    fmt.Println("GetLCA(classTree.ClassNodes, classTree.ClassNodes['DNA/P/Galileo_DM'], classTree.ClassNodes['DNA/TcMar-Pogo/POGO']):", GetLCA(classTree.ClassNodes, classTree.ClassNodes["DNA/P/Galileo_DM"], classTree.ClassNodes["DNA/TcMar-Pogo/POGO"]))
+    //fmt.Println("getLCA(classTree.ClassNodes, classTree.ClassNodes['DNA/P/Galileo_DM'], classTree.ClassNodes['DNA/TcMar-Pogo/POGO']):", getLCA(classTree.ClassNodes, classTree.ClassNodes["DNA/P/Galileo_DM"], classTree.ClassNodes["DNA/TcMar-Pogo/POGO"]))
 
     fmt.Println("min(5, 7):", min(5, 7))
     fmt.Println("max(int64(5), int64(7)):", max(int64(5), int64(7)))
     // matchBares := parseMatchBares(matchLines)
 
-    fmt.Println("getMinimizer(\"ataggatcacgac\", 4) =", getMinimizer("ataggatcacgac", 4))
-    fmt.Println("reverseComplement(\"aaAtGctACggT\") =", reverseComplement("aaAtGctACggT"))
+    //fmt.Println("getMinimizer(\"ataggatcacgac\", 4) =", getMinimizer("ataggatcacgac", 4))
+    fmt.Println("revComp(\"aaAtGctACggT\") =", revComp("aaAtGctACggT"))
 }
