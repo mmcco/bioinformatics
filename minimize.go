@@ -26,7 +26,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-	"reflect"
+	//"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -106,11 +106,15 @@ type ClassNode struct {
 	Class    []string
 	Parent   *ClassNode
 	Children []*ClassNode
+    IsRoot bool
 }
 
 // type synonym, necessary to implement interfaces (e.g. sort)
 type Minimizer []*Kmer
 type Minimizers map[string]Minimizer
+
+type Repeats []Repeat
+type Matches []Match
 
 func checkError(err error) {
 	if err != nil {
@@ -134,7 +138,7 @@ func lines(str string) (numLines int, lines []string) {
 	return numLines, lines
 }
 
-func ParseMatches(genomeName string) []Match {
+func ParseMatches(genomeName string) Matches {
 	filepath := strings.Join([]string{genomeName, "/", genomeName, ".fa.out"}, "")
 	rawMatchesBytes, err := ioutil.ReadFile(filepath)
 	checkError(err)
@@ -142,7 +146,7 @@ func ParseMatches(genomeName string) []Match {
 	_, matchLines := lines(rawMatches)
 	// drop header
 	matchLines = matchLines[3:]
-	var matches []Match
+	var matches Matches
 
 	for i := 0; i < len(matchLines); i++ {
 		rawVals := strings.Fields(matchLines[i])
@@ -234,9 +238,9 @@ func parseMatchBares(matchLines []string) []MatchBare {
 }
 */
 
-func ParseGenome(genomeName string) RefGenome {
+func ParseGenome(genomeName string) *RefGenome {
 	// most fields will be assigned separately
-	refGenome := RefGenome{}
+	refGenome := new(RefGenome)
 	refGenome.Name = genomeName
 
 	chromFileInfos, err := ioutil.ReadDir(genomeName)
@@ -280,7 +284,7 @@ func ParseGenome(genomeName string) RefGenome {
 	return refGenome
 }
 
-func GetRepeats(matches []Match) []Repeat {
+func (matches Matches) GetRepeats() Repeats {
 	// we now populate a list of unique repeat types
 	// repeats are stored in the below slice, indexed by their ID
 	// we first determine the necessary size of the slice - we can't use append because matches are not sorted by repeatID
@@ -288,7 +292,7 @@ func GetRepeats(matches []Match) []Repeat {
 	for i := range matches {
 		repeatsSize = max(repeatsSize, matches[i].RepeatID+1)
 	}
-	repeats := make([]Repeat, repeatsSize)
+	repeats := make(Repeats, repeatsSize)
 
 	// maps a repeat's category to its ID
 	repeatMap := make(map[string](int64))
@@ -384,21 +388,24 @@ func (repeat Repeat) Print() {
 }
 
 func (classTree ClassTree) PrintTree() {
-	classTree.Root.printTreeRec(0)
+	classTree.Root.printTreeRec(0, true)
 }
 
-func (classNode *ClassNode) printTreeRec(indent int) {
+// doesn't print leaves
+// prevents the terminal from being flooded with Unknowns, Others, and Simple Repeats
+func (classTree ClassTree) PrintBranches() {
+    classTree.Root.printTreeRec(0, false)
+}
+
+func (classNode *ClassNode) printTreeRec(indent int, printLeaves bool) {
 	for i := 0; i < indent; i++ {
 		fmt.Printf("\t")
 	}
-	if len(classNode.Class) == 0 {
-		fmt.Println("root")
-	} else {
-		fmt.Println(classNode.Name)
-		//fmt.Printf("%s\n", classNode.Class[indent])
-	}
+    fmt.Println(classNode.Class[len(classNode.Class)-1])
 	for i := range classNode.Children {
-		classNode.Children[i].printTreeRec(indent + 1)
+		if printLeaves || len(classNode.Children[i].Children) > 0 {
+            classNode.Children[i].printTreeRec(indent + 1, printLeaves)
+        }
 	}
 }
 
@@ -412,20 +419,16 @@ func classSliceContains(a_s []*ClassNode, b *ClassNode) bool {
 }
 
 // returns a pointer to the root of the tree a map of ClassNode names to ClassNode pointers
-func GetClassTree(repeats []Repeat) ClassTree {
+func (repeats Repeats) GetClassTree() ClassTree {
 	// mapping to pointers allows us to make references (i.e. pointers) to values
 	classNodes := make(map[string](*ClassNode))
 	// would be prettier if expanded
-	root := &ClassNode{}
+	root := &ClassNode{"root", []string{"root"}, nil, nil, true}
 	classNodes["root"] = root
-	root.Name = "root"
 	// all but Name is left nil
 	for i := 1; i < len(repeats); i++ {
 		// ignore the null indices
 		if repeats[i].ID != 0 {
-			if repeats[i].FullName == "root" {
-				fmt.Println(repeats[i])
-			}
 			// process every heirarchy level (e.g. for "DNA/LINE/TiGGER", process "DNA", then "DNA/LINE", then "DNA/LINE/TiGGER")
 			for j := 1; j <= len(repeats[i].Class); j++ {
 				thisClass := repeats[i].Class[:j]
@@ -433,10 +436,11 @@ func GetClassTree(repeats []Repeat) ClassTree {
 				var keyExists bool
 				_, keyExists = classNodes[thisClassName]
 				if !keyExists {
-					thisClassNode := ClassNode{}
-					classNodes[thisClassName] = &thisClassNode
+					thisClassNode := new(ClassNode)
 					thisClassNode.Name = thisClassName
-					classNodes[thisClassName].Class = thisClass
+					thisClassNode.Class = thisClass
+                    thisClassNode.IsRoot = false
+					classNodes[thisClassName] = thisClassNode
 					// first case handles primary classes, as root is implicit and not listed in thisClass
 					if j == 1 {
 						classNodes[thisClassName].Parent = root
@@ -445,7 +449,7 @@ func GetClassTree(repeats []Repeat) ClassTree {
 					}
 					parent := classNodes[thisClassName].Parent
 					if parent.Children == nil {
-						parent.Children = []*ClassNode{}
+						parent.Children = make([]*ClassNode, 0)
 					}
 					parent.Children = append(parent.Children, classNodes[thisClassName])
 				}
@@ -455,6 +459,30 @@ func GetClassTree(repeats []Repeat) ClassTree {
 	return ClassTree{classNodes, root}
 }
 
+func (cn *ClassNode) getAncestry() []*ClassNode {
+    // condition to prevent nil dereference of Root.Parent
+    if cn.IsRoot {
+        return []*ClassNode{}
+    }
+    ancestry := []*ClassNode{cn.Parent}
+    for !ancestry[len(ancestry)-1].IsRoot {
+        ancestry = append(ancestry, ancestry[len(ancestry)-1].Parent)
+    }
+    return ancestry
+}
+
+func (classTree ClassTree) getLCA(cnA, cnB *ClassNode) *ClassNode {
+    ancestryA, ancestryB := cnA.getAncestry(), cnB.getAncestry()
+    for i := range ancestryA {
+        if classSliceContains(ancestryB, ancestryA[i]) {
+            return ancestryA[i]
+        }
+    }
+    // necessary for compilation - Root should be in the ancestry paths
+    return classTree.Root
+}
+
+/*
 func (classTree ClassTree) getLCA(cnA, cnB *ClassNode) *ClassNode {
 	for i := min(len(cnA.Class), len(cnB.Class)); i > 0; i-- {
 		if reflect.DeepEqual(cnA.Class[:i], cnB.Class[:i]) {
@@ -466,8 +494,9 @@ func (classTree ClassTree) getLCA(cnA, cnB *ClassNode) *ClassNode {
 			return lca
 		}
 	}
-	return classTree.ClassNodes["root"]
+	return classTree.Root
 }
+*/
 
 // The logic for determining the minimizer
 // Currently, it uses simple lexicographic ordering
@@ -507,7 +536,7 @@ func (minimizers Minimizers) getKmer(minimizer string, kmer string) *Kmer {
 	return nil
 }
 
-func Minimize(refGenome RefGenome, matches []Match, classTree ClassTree, k uint8, m uint8) Minimizers {
+func Minimize(refGenome *RefGenome, matches Matches, classTree ClassTree, k uint8, m uint8) Minimizers {
 	// maps to *Kmer, as we did with ClassNodes, because of this golang foible: https://code.google.com/p/go/issues/detail?id=3117
 	minimizers := make(Minimizers)
 	// because it's a uint8, k can be at most 255 (the same, of course, goes for m)
@@ -599,7 +628,11 @@ func boolToInt(a bool) int {
 	}
 }
 
-func (minimizers Minimizers) Write(filename string) {
+// !!! using []bytes instead of strings would probably make this faster
+// additionally, using strconv and the writer's writing methods would probably be much faster
+// profiling will determine whether these optimizations are worthwhile
+func (minimizers Minimizers) Write(genomeName string) {
+    filename := strings.Join([]string{genomeName, ".mins"}, "")
 	outfile, err := os.Create(filename)
 	checkError(err)
 	defer outfile.Close()
@@ -607,22 +640,14 @@ func (minimizers Minimizers) Write(filename string) {
 	defer writer.Flush()
 
 	for thisMin, minimizers := range minimizers {
-		_, err = writer.WriteRune('>')
-		checkError(err)
-		_, err = writer.WriteString(thisMin)
-		checkError(err)
-		_, err = writer.WriteRune('\n')
+        _, err = fmt.Fprintln(writer, ">", thisMin)
 		checkError(err)
 		sort.Sort(minimizers)
 		for i := range minimizers {
-			_, err = writer.WriteString(strings.Join([]string{minimizers[i].Kmer, string(minimizers[i].MinOffset), string(boolToInt(minimizers[i].IsRevComp))}, " "))
-			checkError(err)
-			_, err = writer.WriteRune('\n')
+            _, err = fmt.Fprintf(writer, "\t%s %d %d\n", minimizers[i].Kmer, minimizers[i].MinOffset, boolToInt(minimizers[i].IsRevComp))
 			checkError(err)
 			for repeatID, count := range minimizers[i].Count {
-				_, err = writer.WriteRune('\t')
-				checkError(err)
-				_, err = writer.WriteString(strings.Join([]string{string(repeatID), string(count)}, " "))
+				_, err = fmt.Fprintf(writer, "\t\t%d %d\n", repeatID, count)
 				checkError(err)
 			}
 		}
@@ -639,20 +664,22 @@ func main() {
 	genomeName := os.Args[1]
 	refGenome := ParseGenome(genomeName)
 	matches := ParseMatches(genomeName)
-	repeats := GetRepeats(matches)
-	classTree := GetClassTree(repeats)
+	repeats := matches.GetRepeats()
+	classTree := repeats.GetClassTree()
+    /*
 	minimizers := Minimize(refGenome, matches, classTree, 31, 15)
 	fmt.Println("number of kmers minimized:", len(minimizers))
-    minimizers.Write("mins.out")
+    minimizers.Write(genomeName)
+    */
 
 	// below are testing statements
 
 	fmt.Println("number of chromosomes parsed:", len(refGenome.Chroms))
 
-	classTree.PrintTree()
+	classTree.PrintBranches()
 	fmt.Println("number of ClassNodes:", len(classTree.ClassNodes))
 
-	//fmt.Println("getLCA(classTree.ClassNodes, classTree.ClassNodes['DNA/P/Galileo_DM'], classTree.ClassNodes['DNA/TcMar-Pogo/POGO']):", getLCA(classTree.ClassNodes, classTree.ClassNodes["DNA/P/Galileo_DM"], classTree.ClassNodes["DNA/TcMar-Pogo/POGO"]))
+	fmt.Println("classTree.getLCA(classTree.ClassNodes['DNA/TcMar-Mariner'], classTree.ClassNodes['DNA/TcMar-Tc1']):", classTree.getLCA(classTree.ClassNodes["DNA/TcMar-Mariner"], classTree.ClassNodes["DNA/TcMar-Tc1"]))
 
 	fmt.Println("min(5, 7):", min(5, 7))
 	fmt.Println("max(int64(5), int64(7)):", max(int64(5), int64(7)))
