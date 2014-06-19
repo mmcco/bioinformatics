@@ -1,7 +1,7 @@
 /*
    WARNING!!! This program is currently under development and may be buggy or broken.
 
-   Must change kmer map index from kmer to minimizer.
+   Should reconsider what is a pointer and what is directly referenced
 
    Still needs full support for below data spec.
 
@@ -26,7 +26,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
-	//"reflect"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,6 +34,8 @@ import (
 )
 
 var err error
+
+var NUM_CPU int = max(1, runtime.NumCPU()-3)
 
 // uses 64-bit values, which is probably unnecessary for some fields
 // this is done for simplicity (and strconv compatibility)
@@ -106,7 +108,7 @@ type ClassNode struct {
 	Class    []string
 	Parent   *ClassNode
 	Children []*ClassNode
-    IsRoot bool
+	IsRoot   bool
 }
 
 // type synonym, necessary to implement interfaces (e.g. sort)
@@ -290,7 +292,7 @@ func (matches Matches) GetRepeats() Repeats {
 	// we first determine the necessary size of the slice - we can't use append because matches are not sorted by repeatID
 	var repeatsSize int64 = 1
 	for i := range matches {
-		repeatsSize = max(repeatsSize, matches[i].RepeatID+1)
+		repeatsSize = max64(repeatsSize, matches[i].RepeatID+1)
 	}
 	repeats := make(Repeats, repeatsSize)
 
@@ -361,7 +363,15 @@ func revComp(seq string) string {
 	return string(revCompSeq)
 }
 
-func max(a int64, b int64) int64 {
+func max(a int, b int) int {
+	if a > b {
+		return a
+	} else {
+		return b
+	}
+}
+
+func max64(a int64, b int64) int64 {
 	if a > b {
 		return a
 	} else {
@@ -394,18 +404,18 @@ func (classTree ClassTree) PrintTree() {
 // doesn't print leaves
 // prevents the terminal from being flooded with Unknowns, Others, and Simple Repeats
 func (classTree ClassTree) PrintBranches() {
-    classTree.Root.printTreeRec(0, false)
+	classTree.Root.printTreeRec(0, false)
 }
 
 func (classNode *ClassNode) printTreeRec(indent int, printLeaves bool) {
 	for i := 0; i < indent; i++ {
 		fmt.Printf("\t")
 	}
-    fmt.Println(classNode.Class[len(classNode.Class)-1])
+	fmt.Println(classNode.Class[len(classNode.Class)-1])
 	for i := range classNode.Children {
 		if printLeaves || len(classNode.Children[i].Children) > 0 {
-            classNode.Children[i].printTreeRec(indent + 1, printLeaves)
-        }
+			classNode.Children[i].printTreeRec(indent+1, printLeaves)
+		}
 	}
 }
 
@@ -439,7 +449,7 @@ func (repeats Repeats) GetClassTree() ClassTree {
 					thisClassNode := new(ClassNode)
 					thisClassNode.Name = thisClassName
 					thisClassNode.Class = thisClass
-                    thisClassNode.IsRoot = false
+					thisClassNode.IsRoot = false
 					classNodes[thisClassName] = thisClassNode
 					// first case handles primary classes, as root is implicit and not listed in thisClass
 					if j == 1 {
@@ -460,43 +470,27 @@ func (repeats Repeats) GetClassTree() ClassTree {
 }
 
 func (cn *ClassNode) getAncestry() []*ClassNode {
-    // condition to prevent nil dereference of Root.Parent
-    if cn.IsRoot {
-        return []*ClassNode{}
-    }
-    ancestry := []*ClassNode{cn.Parent}
-    for !ancestry[len(ancestry)-1].IsRoot {
-        ancestry = append(ancestry, ancestry[len(ancestry)-1].Parent)
-    }
-    return ancestry
+	// condition to prevent nil dereference of Root.Parent
+	if cn.IsRoot {
+		return []*ClassNode{}
+	}
+	ancestry := []*ClassNode{cn.Parent}
+	for !ancestry[len(ancestry)-1].IsRoot {
+		ancestry = append(ancestry, ancestry[len(ancestry)-1].Parent)
+	}
+	return ancestry
 }
 
 func (classTree ClassTree) getLCA(cnA, cnB *ClassNode) *ClassNode {
-    ancestryA, ancestryB := cnA.getAncestry(), cnB.getAncestry()
-    for i := range ancestryA {
-        if classSliceContains(ancestryB, ancestryA[i]) {
-            return ancestryA[i]
-        }
-    }
-    // necessary for compilation - Root should be in the ancestry paths
-    return classTree.Root
-}
-
-/*
-func (classTree ClassTree) getLCA(cnA, cnB *ClassNode) *ClassNode {
-	for i := min(len(cnA.Class), len(cnB.Class)); i > 0; i-- {
-		if reflect.DeepEqual(cnA.Class[:i], cnB.Class[:i]) {
-			// we walk back to the LCA's pointer through the parent fields
-			lca := cnA
-			for j := 0; j < len(cnA.Class)-i; i++ {
-				lca = lca.Parent
-			}
-			return lca
+	ancestryA, ancestryB := cnA.getAncestry(), cnB.getAncestry()
+	for i := range ancestryA {
+		if classSliceContains(ancestryB, ancestryA[i]) {
+			return ancestryA[i]
 		}
 	}
+	// necessary for compilation - Root should be in the ancestry paths
 	return classTree.Root
 }
-*/
 
 // The logic for determining the minimizer
 // Currently, it uses simple lexicographic ordering
@@ -564,7 +558,11 @@ func Minimize(refGenome *RefGenome, matches Matches, classTree ClassTree, k uint
 				possMin = kmer[x : x+m]
 				// fmt.Println("minOffset:", minOffset)    // DELETE ME
 				// holds the current minimizer
-				currMin = kmer[minOffset : minOffset+m]
+				if isRevComp {
+					currMin = revComp(kmer[minOffset : minOffset+m])
+				} else {
+					currMin = kmer[minOffset : minOffset+m]
+				}
 				// in some cases we can use most of the calculations from the previous kmer
 				// when the previous minimizer isn't in the current kmer, though, we have to start from scratch
 				if minOffset < x {
@@ -581,7 +579,11 @@ func Minimize(refGenome *RefGenome, matches Matches, classTree ClassTree, k uint
 					}
 				}
 				// if the kmers already there, we just update its LCA and increment its counter
-				currMin = kmer[minOffset : minOffset+m]
+				if isRevComp {
+					currMin = revComp(kmer[minOffset : minOffset+m])
+				} else {
+					currMin = kmer[minOffset : minOffset+m]
+				}
 				kmerStruct = minimizers.getKmer(currMin, kmer)
 				if kmerStruct != nil {
 					if classTree.ClassNodes[matches[i].FullName] == nil {
@@ -632,7 +634,7 @@ func boolToInt(a bool) int {
 // additionally, using strconv and the writer's writing methods would probably be much faster
 // profiling will determine whether these optimizations are worthwhile
 func (minimizers Minimizers) Write(genomeName string) {
-    filename := strings.Join([]string{genomeName, ".mins"}, "")
+	filename := strings.Join([]string{genomeName, ".mins"}, "")
 	outfile, err := os.Create(filename)
 	checkError(err)
 	defer outfile.Close()
@@ -640,11 +642,11 @@ func (minimizers Minimizers) Write(genomeName string) {
 	defer writer.Flush()
 
 	for thisMin, minimizers := range minimizers {
-        _, err = fmt.Fprintln(writer, ">", thisMin)
+		_, err = fmt.Fprintln(writer, ">", thisMin)
 		checkError(err)
 		sort.Sort(minimizers)
 		for i := range minimizers {
-            _, err = fmt.Fprintf(writer, "\t%s %d %d\n", minimizers[i].Kmer, minimizers[i].MinOffset, boolToInt(minimizers[i].IsRevComp))
+			_, err = fmt.Fprintf(writer, "\t%s %d %d\n", minimizers[i].Kmer, minimizers[i].MinOffset, boolToInt(minimizers[i].IsRevComp))
 			checkError(err)
 			for repeatID, count := range minimizers[i].Count {
 				_, err = fmt.Fprintf(writer, "\t\t%d %d\n", repeatID, count)
@@ -666,11 +668,9 @@ func main() {
 	matches := ParseMatches(genomeName)
 	repeats := matches.GetRepeats()
 	classTree := repeats.GetClassTree()
-    /*
 	minimizers := Minimize(refGenome, matches, classTree, 31, 15)
 	fmt.Println("number of kmers minimized:", len(minimizers))
-    minimizers.Write(genomeName)
-    */
+	minimizers.Write(genomeName)
 
 	// below are testing statements
 
@@ -678,13 +678,18 @@ func main() {
 
 	classTree.PrintBranches()
 	fmt.Println("number of ClassNodes:", len(classTree.ClassNodes))
+	fmt.Println("SeqCompare('aacct', 'aacct'):", SeqCompare("aacct", "aacct"))
+	fmt.Println("SeqCompare('aacca', 'aaccg'):", SeqCompare("aacca", "aaccg"))
+	fmt.Println("SeqCompare('aacct', 'aacca'):", SeqCompare("aacct", "aacca"))
 
 	fmt.Println("classTree.getLCA(classTree.ClassNodes['DNA/TcMar-Mariner'], classTree.ClassNodes['DNA/TcMar-Tc1']):", classTree.getLCA(classTree.ClassNodes["DNA/TcMar-Mariner"], classTree.ClassNodes["DNA/TcMar-Tc1"]))
 
 	fmt.Println("min(5, 7):", min(5, 7))
-	fmt.Println("max(int64(5), int64(7)):", max(int64(5), int64(7)))
+	fmt.Println("max64(int64(5), int64(7)):", max64(int64(5), int64(7)))
 	// matchBares := parseMatchBares(matchLines)
 
 	//fmt.Println("getMinimizer(\"ataggatcacgac\", 4) =", getMinimizer("ataggatcacgac", 4))
 	fmt.Println("revComp(\"aaAtGctACggT\") =", revComp("aaAtGctACggT"))
+
+	fmt.Println("numer of CPUs available:", NUM_CPU)
 }
