@@ -135,7 +135,6 @@ func lines(str string) (numLines int, lines []string) {
 }
 
 func ParseMatches(genomeName string) []Match {
-	// !!! Below string literal is a temporary solution!
 	filepath := strings.Join([]string{genomeName, "/", genomeName, ".fa.out"}, "")
 	rawMatchesBytes, err := ioutil.ReadFile(filepath)
 	checkError(err)
@@ -499,18 +498,18 @@ func (refGenome RefGenome) PrintChromInfo() {
 
 // returns a pointer to the supplied kmer with the supplied minimizer in the supplied map
 // if it does not exist, nil is returned
-func getKmer(kmers map[string]([]*Kmer), minimizer string, kmer string) *Kmer {
-	for i := range kmers[minimizer] {
-		if kmers[minimizer][i].Kmer == kmer {
-			return kmers[minimizer][i]
+func (minimizers Minimizers) getKmer(minimizer string, kmer string) *Kmer {
+	for i := range minimizers[minimizer] {
+		if minimizers[minimizer][i].Kmer == kmer {
+			return minimizers[minimizer][i]
 		}
 	}
 	return nil
 }
 
-func Minimize(refGenome RefGenome, matches []Match, classTree ClassTree, k uint8, m uint8) map[string]([]*Kmer) {
+func Minimize(refGenome RefGenome, matches []Match, classTree ClassTree, k uint8, m uint8) Minimizers {
 	// maps to *Kmer, as we did with ClassNodes, because of this golang foible: https://code.google.com/p/go/issues/detail?id=3117
-	kmers := make(map[string]([]*Kmer))
+	minimizers := make(Minimizers)
 	// because it's a uint8, k can be at most 255 (the same, of course, goes for m)
 	var start, end int64
 	// minOffset holds the offset of the current minimizer
@@ -554,7 +553,7 @@ func Minimize(refGenome RefGenome, matches []Match, classTree ClassTree, k uint8
 				}
 				// if the kmers already there, we just update its LCA and increment its counter
 				currMin = kmer[minOffset : minOffset+m]
-				kmerStruct = getKmer(kmers, currMin, kmer)
+				kmerStruct = minimizers.getKmer(currMin, kmer)
 				if kmerStruct != nil {
 					if classTree.ClassNodes[matches[i].FullName] == nil {
 						fmt.Println("match has nil ClassNode:", matches[i].FullName)
@@ -566,7 +565,7 @@ func Minimize(refGenome RefGenome, matches []Match, classTree ClassTree, k uint8
 					kmerStruct.LCA = classTree.getLCA(kmerStruct.LCA, classTree.ClassNodes[matches[i].FullName])
 					kmerStruct.Count[matches[i].RepeatID]++
 				} else {
-					kmers[currMin] = append(kmers[currMin], &Kmer{kmer,
+					minimizers[currMin] = append(minimizers[currMin], &Kmer{kmer,
 						minOffset,
 						isRevComp,
 						classTree.ClassNodes[matches[i].FullName],
@@ -575,7 +574,7 @@ func Minimize(refGenome RefGenome, matches []Match, classTree ClassTree, k uint8
 			}
 		}
 	}
-	return kmers
+	return minimizers
 }
 
 // needed for sort.Interface
@@ -600,27 +599,27 @@ func boolToInt(a bool) int {
 	}
 }
 
-func WriteMinimizers(filename string, minimizers Minimizers) {
+func (minimizers Minimizers) Write(filename string) {
 	outfile, err := os.Create(filename)
 	checkError(err)
 	defer outfile.Close()
 	writer := bufio.NewWriter(outfile)
 	defer writer.Flush()
 
-	for thisMin, kmers := range minimizers {
+	for thisMin, minimizers := range minimizers {
 		_, err = writer.WriteRune('>')
 		checkError(err)
 		_, err = writer.WriteString(thisMin)
 		checkError(err)
 		_, err = writer.WriteRune('\n')
 		checkError(err)
-		sort.Sort(kmers)
-		for i := range kmers {
-			_, err = writer.WriteString(strings.Join([]string{kmers[i].Kmer, string(kmers[i].MinOffset), string(boolToInt(kmers[i].IsRevComp))}, " "))
+		sort.Sort(minimizers)
+		for i := range minimizers {
+			_, err = writer.WriteString(strings.Join([]string{minimizers[i].Kmer, string(minimizers[i].MinOffset), string(boolToInt(minimizers[i].IsRevComp))}, " "))
 			checkError(err)
 			_, err = writer.WriteRune('\n')
 			checkError(err)
-			for repeatID, count := range kmers[i].Count {
+			for repeatID, count := range minimizers[i].Count {
 				_, err = writer.WriteRune('\t')
 				checkError(err)
 				_, err = writer.WriteString(strings.Join([]string{string(repeatID), string(count)}, " "))
@@ -644,6 +643,7 @@ func main() {
 	classTree := GetClassTree(repeats)
 	minimizers := Minimize(refGenome, matches, classTree, 31, 15)
 	fmt.Println("number of kmers minimized:", len(minimizers))
+    minimizers.Write("mins.out")
 
 	// below are testing statements
 
