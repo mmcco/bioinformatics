@@ -1,6 +1,14 @@
 /*
    WARNING!!! This program is currently under development and may be buggy or broken.
 
+   A barebones (at the moment) Go script for parsing and minimizing repeats
+
+   This script expects there to be a subdirectory of the current directory named after the reference genome used (e.g. "dm3") that contains the following files:
+       * a RepeatMasker library containing:
+           - the match library (e.g. "dm3.fa.out")
+           - the alignment information (e.g. "dm3.fa.align")
+       * one or more reference genome files in FASTA format with the suffix ".fa"
+
    Premature commenting is the root of all evil, and I have sinned. Please read comments skeptically.
 
    Should reconsider what is a pointer and what is directly referenced
@@ -9,21 +17,11 @@
 
    Should review where []byte is used and where string is used
 
-   Still needs full support for below data spec.
-
-   For caching efficiency, we should change the minimizer data structure to a map-indexed 1D slice of Kmers (not *Kmers).
+   For caching efficiency, we should change the minimizer data structure to a map-indexed 1D slice of Kmers (not *Kmers). (This technique originated in Kraken.)
 
    Int sizes should be reviewed for memory efficiency.
 
-   A barebones (at the moment) Go script for parsing and minimizing repeats
-
    The sole command line argument is the name of the reference genome (e.g. "dm3").
-
-   This script expects there to be a subdirectory of the current directory named after the reference genome used (e.g. "dm3") that contains the following files:
-       * a RepeatMasker library containing:
-           - the match library (e.g. "dm3.fa.out")
-           - the alignment information (e.g. "dm3.fa.align")
-       * one or more reference genome files in FASTA format with the suffix ".fa"
 */
 
 package main
