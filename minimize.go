@@ -92,6 +92,7 @@ type ClassTree struct {
 type Kmer struct {
 	// should likely be renamed "Seq" or "KmerSeq"
 	Kmer      []byte
+	Min       string
 	MinOffset uint8
 	M         uint8
 	IsRevComp bool
@@ -300,22 +301,40 @@ func (matches Matches) getRepeats() (Repeats, map[string]int64) {
 }
 
 func getMinimizer(kmer []byte, m uint8) (uint8, bool) {
-	var minOffset uint8 = 0
-	isRevComp := false
 	var possMin []byte
 	var i uint8
+	var k uint8 = uint8(len(kmer))
 	currMin := kmer[:m]
-	for i = 0; i <= uint8(len(kmer))-m; i++ {
+	var minOffset uint8 = 0
+	isRevComp := false
+	for i = 0; i <= k-m; i++ {
+		// below is a potential performance sink - it can be optimized out later if necessary
 		possMin = kmer[i : i+m]
-		if SeqCompare(currMin, possMin) == 1 {
-			minOffset = i
-			isRevComp = false
-			currMin = possMin
-		}
-		if SeqCompare(currMin, revComp(possMin)) == 1 {
-			minOffset = i
-			isRevComp = true
-			currMin = revComp(possMin)
+		// holds the current minimizer
+		// in some cases we can use most of the calculations from the previous kmer
+		// when the previous minimizer isn't in the current kmer, though, we have to start from scratch
+		if isRevComp {
+			if !testRevComp(currMin, possMin) {
+				minOffset = i
+				isRevComp = false
+				currMin = kmer[minOffset : minOffset+m]
+			}
+			if testTwoRevComps(possMin, currMin) {
+				minOffset = i
+				isRevComp = true
+				currMin = kmer[minOffset : minOffset+m]
+			}
+		} else {
+			if SeqCompare(currMin, possMin) == 1 {
+				minOffset = i
+				isRevComp = false
+				currMin = kmer[minOffset : minOffset+m]
+			}
+			if testRevComp(possMin, currMin) {
+				minOffset = i
+				isRevComp = true
+				currMin = kmer[minOffset : minOffset+m]
+			}
 		}
 	}
 	return minOffset, isRevComp
@@ -572,85 +591,81 @@ func testTwoRevComps(a, b []byte) bool {
 	return false
 }
 
+/*
 // !!! WARNING - This func's logic is outdated - a more efficient version is being developed in MinimizeThread()
 func Minimize(refGenome *RefGenome, k uint8, m uint8) Minimizers {
-	// maps to *Kmer, as we did with ClassNodes, because of this golang foible: https://code.google.com/p/go/issues/detail?id=3117
-	minimizers := make(Minimizers)
-	// because it's a uint8, k can be at most 255 (the same, of course, goes for m)
-	var start, end int64
-	// minOffset holds the offset of the current minimizer
-	var x, minOffset uint8
-	var seq, currMin, possMin, kmer []byte
-	var seqName string
-	var isRevComp bool
-	var kmerStruct *Kmer
-	for i := range refGenome.Matches {
-		start, end, seqName = refGenome.Matches[i].SeqStart, refGenome.Matches[i].SeqEnd, refGenome.Matches[i].SeqName
-		// !!! the reference genome is two-dimensional, but RepeatMasker only supplies one sequence name
-		// we resolve this ambiguity with the assumption that each chromosome file contains only one sequence
-		// this holds true, at least in dm3
-		seq = refGenome.Chroms[seqName][seqName][start:end]
-		for j := 0; j <= len(seq)-int(k); j++ {
-			kmer = seq[j : j+int(k)]
-			//fmt.Printf("kmer: seq[%d:%d] = %s\n", j, j+int(k), kmer) // DELETE ME
-			// we have to calculate the first minimizer from scratch
-			minOffset, isRevComp = getMinimizer(kmer, m)
-			if isRevComp {
-				currMin = revComp(kmer[minOffset : minOffset+m])
-			} else {
-				currMin = kmer[minOffset : minOffset+m]
-			}
-			// x is the start index of the current possMin, the minimizer we're testing on this loop
-			for x = 1; x <= k-m; x++ {
-				// below is a potential performance sink - it can be optimized out later if necessary
-				//fmt.Printf("possMin: kmer[%d:%d]\n", x, (x + m)) // DELETE ME
-				possMin = kmer[x : x+m]
-				// fmt.Println("minOffset:", minOffset)    // DELETE ME
-				// holds the current minimizer
-				// in some cases we can use most of the calculations from the previous kmer
-				// when the previous minimizer isn't in the current kmer, though, we have to start from scratch
-				if minOffset < x {
-					minOffset, isRevComp = getMinimizer(kmer, m)
-					if isRevComp {
-						currMin = revComp(kmer[minOffset : minOffset+m])
-					} else {
-						currMin = kmer[minOffset : minOffset+m]
-					}
-				} else {
-					// otherwise there are only two options to overtake the previous minimizer: the last possible minimizer, and its reverse complement
-					if SeqCompare(currMin, possMin) == 1 {
-						minOffset = x
-						isRevComp = false
-						currMin = kmer[minOffset : minOffset+m]
-					}
-					if testRevComp(possMin, currMin) {
-						minOffset = x
-						isRevComp = true
-						currMin = revComp(kmer[minOffset : minOffset+m])
-					}
-				}
-			}
-			// if the kmers already there, we just update its LCA and increment its counter
-			kmerStruct = minimizers.getKmer(string(currMin), kmer)
-			if kmerStruct != nil {
-				// this shows a bit of a wart in the data structures - do we want each match to store a pointer to its ClassNode?
-				kmerStruct.LCA = refGenome.ClassTree.getLCA(kmerStruct.LCA, refGenome.ClassTree.ClassNodes[refGenome.Matches[i].FullName])
-				kmerStruct.Count[refGenome.Matches[i].RepeatID]++
-			} else {
-				minimizers[string(currMin)] = append(minimizers[string(currMin)], &Kmer{kmer,
-					minOffset,
-					m,
-					isRevComp,
-					refGenome.ClassTree.ClassNodes[refGenome.Matches[i].FullName],
-					map[int64]int32{refGenome.Matches[i].RepeatID: 1}})
-			}
-		}
-	}
-	for _, kmers := range minimizers {
-		sort.Sort(kmers)
-	}
-	return minimizers
+    // maps to *Kmer, as we did with ClassNodes, because of this golang foible: https://code.google.com/p/go/issues/detail?id=3117
+    minimizers := make(Minimizers)
+    // because it's a uint8, k can be at most 255 (the same, of course, goes for m)
+    var start, end int64
+    // minOffset holds the offset of the current minimizer
+    var x, minOffset uint8
+    var seq, currMin, possMin, kmer []byte
+    var seqName string
+    var isRevComp, firstMin bool
+    var kmerStruct *Kmer
+    for i := range refGenome.Matches {
+        start, end, seqName = refGenome.Matches[i].SeqStart, refGenome.Matches[i].SeqEnd, refGenome.Matches[i].SeqName
+        // !!! the reference genome is two-dimensional, but RepeatMasker only supplies one sequence name
+        // we resolve this ambiguity with the assumption that each chromosome file contains only one sequence
+        // this holds true, at least in dm3
+        seq = refGenome.Chroms[seqName][seqName][start:end]
+        for j := 0; j <= len(seq)-int(k); j++ {
+            kmer = seq[j : j+int(k)]
+            // we have to calculate the first minimizer from scratch
+            minOffset, isRevComp = getMinimizer(kmer, m)
+            firstMin = true
+            // x is the start index of the current possMin, the minimizer we're testing on this loop
+            for x = 0; x <= k-m; x++ {
+                // below is a potential performance sink - it can be optimized out later if necessary
+                possMin = kmer[x : x+m]
+                // holds the current minimizer
+                // in some cases we can use most of the calculations from the previous kmer
+                // when the previous minimizer isn't in the current kmer, though, we have to start from scratch
+                if minOffset < x || firstMin {
+                    firstMin = false
+                    minOffset, isRevComp = getMinimizer(kmer, m)
+                    if isRevComp {
+                        currMin = revComp(kmer[minOffset : minOffset+m])
+                    } else {
+                        currMin = kmer[minOffset : minOffset+m]
+                    }
+                } else {
+                    // otherwise there are only two options to overtake the previous minimizer: the last possible minimizer, and its reverse complement
+                    if SeqCompare(currMin, possMin) == 1 {
+                        minOffset = x
+                        isRevComp = false
+                        currMin = kmer[minOffset : minOffset+m]
+                    }
+                    if testRevComp(possMin, currMin) {
+                        minOffset = x
+                        isRevComp = true
+                        currMin = revComp(kmer[minOffset : minOffset+m])
+                    }
+                }
+            }
+            // if the kmers already there, we just update its LCA and increment its counter
+            kmerStruct = minimizers.getKmer(string(currMin), kmer)
+            if kmerStruct != nil {
+                // this shows a bit of a wart in the data structures - do we want each match to store a pointer to its ClassNode?
+                kmerStruct.LCA = refGenome.ClassTree.getLCA(kmerStruct.LCA, refGenome.ClassTree.ClassNodes[refGenome.Matches[i].FullName])
+                kmerStruct.Count[refGenome.Matches[i].RepeatID]++
+            } else {
+                minimizers[string(currMin)] = append(minimizers[string(currMin)], &Kmer{kmer,
+                    minOffset,
+                    m,
+                    isRevComp,
+                    refGenome.ClassTree.ClassNodes[refGenome.Matches[i].FullName],
+                    map[int64]int32{refGenome.Matches[i].RepeatID: 1}})
+            }
+        }
+    }
+    for _, kmers := range minimizers {
+        sort.Sort(kmers)
+    }
+    return minimizers
 }
+*/
 
 // needed for sort.Interface
 func (kmers Kmers) Len() int {
@@ -701,7 +716,6 @@ func (minimizers Minimizers) Write(genomeName string) {
 // some of the logic in here is deeply nested or non-obvious for efficiency's sake
 // specifically, we made sure not to make any heap allocations, which means reverse complements can never be explicitly evaluated
 func MinimizeThread(refGenome *RefGenome, k, m uint8, mStart, mEnd int64, c chan MinPair) {
-	//fmt.Println("\t\tTHREAD!!!")
 	//startTime := time.Now()
 	var start, end int64
 	var seqName string
@@ -717,16 +731,13 @@ func MinimizeThread(refGenome *RefGenome, k, m uint8, mStart, mEnd int64, c chan
 		seq = refGenome.Chroms[seqName][seqName][start:end]
 		for j := 0; j <= len(seq)-int(k); j++ {
 			kmer = seq[j : j+int(k)]
-			//fmt.Printf("kmer: seq[%d:%d] = %s\n", j, j+int(k), kmer) // DELETE ME
 			// we have to calculate the first minimizer from scratch
 			minOffset, isRevComp = getMinimizer(kmer, m)
 			currMin = kmer[minOffset : minOffset+m]
 			// x is the start index of the current possMin, the minimizer we're testing on this loop
 			for x = 1; x <= k-m; x++ {
 				// below is a potential performance sink - it can be optimized out later if necessary
-				//fmt.Printf("possMin: kmer[%d:%d]\n", x, (x + m)) // DELETE ME
 				possMin = kmer[x : x+m]
-				// fmt.Println("minOffset:", minOffset)    // DELETE ME
 				// holds the current minimizer
 				// in some cases we can use most of the calculations from the previous kmer
 				// when the previous minimizer isn't in the current kmer, though, we have to start from scratch
@@ -758,6 +769,7 @@ func MinimizeThread(refGenome *RefGenome, k, m uint8, mStart, mEnd int64, c chan
 				}
 			}
 			c <- MinPair{&Kmer{kmer,
+				string(currMin),
 				minOffset,
 				m,
 				isRevComp,
@@ -780,20 +792,22 @@ func MinimizeServer(refGenome *RefGenome, k, m uint8, numCPU int) Minimizers {
 
 	var kmer, existingKmer *Kmer
 	var match *Match
-	var kmerMin []byte
 	var minPair MinPair
 	minimizers := make(Minimizers)
+	fmt.Println(refGenome.numKmers(k), "kmers to process")
 	for i = 0; i < refGenome.numKmers(k); i++ {
+		if i%1000 == 0 {
+			fmt.Println(i, "kmers processed")
+		}
 		minPair = <-c
 		kmer, match = minPair.Kmer, minPair.Match
-		kmerMin = kmer.getMin()
-		existingKmer = minimizers.getKmer(string(kmerMin), kmer.Kmer)
+		existingKmer = minimizers.getKmer(kmer.Min, kmer.Kmer)
 		if existingKmer != nil {
 			// this shows a bit of a wart in the data structures - do we want each match to store a pointer to its ClassNode?
 			existingKmer.Count[match.RepeatID]++
 			existingKmer.LCA = refGenome.ClassTree.getLCA(existingKmer.LCA, kmer.LCA)
 		} else {
-			minimizers[string(kmerMin)] = append(minimizers[string(kmerMin)], kmer)
+			minimizers[kmer.Min] = append(minimizers[kmer.Min], kmer)
 		}
 	}
 	for _, kmers := range minimizers {
@@ -848,11 +862,13 @@ func main() {
 	}
 	genomeName := os.Args[2]
 	refGenome := ParseGenome(genomeName)
+	fmt.Println("genome parsed")
 	//minimizers := Minimize(refGenome, 31, 15)
 	runtime.GOMAXPROCS(runtime.NumCPU())
 	var k uint8 = 31
 	var m uint8 = 15
 	minimizers := MinimizeServer(refGenome, k, m, runtime.NumCPU())
+	fmt.Println("minimizers populated")
 	minimizers.Write(genomeName)
 
 	// below are testing statements
