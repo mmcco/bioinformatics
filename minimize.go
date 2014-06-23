@@ -796,7 +796,7 @@ func MinimizeServer(refGenome *RefGenome, k, m uint8, numCPU int) Minimizers {
     var minPair MinPair
     minimizers := make(Minimizers)
     numKmers := refGenome.numKmers(k)
-    fmt.Println(numKmers, "kmers to process")
+    fmt.Println(numKmers, "\t\tkmers to process")
     for i = 0; i < numKmers; i++ {
         if i%10000 == 0 {
             fmt.Println(i, "kmers processed")
