@@ -53,20 +53,20 @@ var err error
 // this is done for simplicity (and strconv compatibility)
 // it should probably be changed eventually
 type Match struct {
-    SW_Score      int64
+    SW_Score      int32
     PercDiv       float64
     PercDel       float64
     PercIns       float64
     SeqName       string
-    SeqStart      int64
-    SeqEnd        int64
-    SeqRemains    int64
+    SeqStart      uint64
+    SeqEnd        uint64
+    SeqRemains    uint64
     IsRevComp     bool
     RepeatClass   []string
-    RepeatStart   int64
-    RepeatEnd     int64
-    RepeatRemains int64
-    RepeatID      int64
+    RepeatStart   uint64
+    RepeatEnd     uint64
+    RepeatRemains uint64
+    RepeatID      int32
 
     // not in parsed data file
     FullName string
@@ -81,7 +81,7 @@ type RepeatGenome struct {
     Matches   Matches
     ClassTree ClassTree
     Repeats   Repeats
-    RepeatMap map[string]int64
+    RepeatMap map[string]int32
 }
 
 type ClassTree struct {
@@ -101,11 +101,11 @@ type Kmer struct {
     M         uint8
     IsRevComp bool
     LCA       *ClassNode
-    Count     map[int64]int32
+    Count     map[int32]int32
 }
 
 type Repeat struct {
-    ID       int64
+    ID       int32
     Class    []string
     FullName string
 }
@@ -163,6 +163,7 @@ func parseMatches(genomeName string) Matches {
     // drop header
     matchLines = matchLines[3:]
     var matches Matches
+    var sw_Score, repeatID int64
 
     for i := range matchLines {
         matchLine := string(matchLines[i])
@@ -181,8 +182,9 @@ func parseMatches(genomeName string) Matches {
         }
 
         // everything in this block is just vanilla trimming, converting, and error checking
-        match.SW_Score, err = strconv.ParseInt(rawVals[0], 10, 64)
+        sw_Score, err = strconv.ParseInt(rawVals[0], 10, 32)
         checkError(err)
+        match.SW_Score = int32(sw_Score)
         match.PercDiv, err = strconv.ParseFloat(rawVals[1], 64)
         checkError(err)
         match.PercDel, err = strconv.ParseFloat(rawVals[2], 64)
@@ -190,22 +192,23 @@ func parseMatches(genomeName string) Matches {
         match.PercIns, err = strconv.ParseFloat(rawVals[3], 64)
         checkError(err)
         match.SeqName = strings.TrimSpace(rawVals[4])
-        match.SeqStart, err = strconv.ParseInt(rawVals[5], 10, 64)
+        match.SeqStart, err = strconv.ParseUint(rawVals[5], 10, 64)
         checkError(err)
-        match.SeqEnd, err = strconv.ParseInt(rawVals[6], 10, 64)
+        match.SeqEnd, err = strconv.ParseUint(rawVals[6], 10, 64)
         checkError(err)
-        match.SeqRemains, err = strconv.ParseInt(rawVals[7], 10, 64)
+        match.SeqRemains, err = strconv.ParseUint(rawVals[7], 10, 64)
         checkError(err)
         // match.IsComplement, rawVals[8], moved above
         match.RepeatClass = append(strings.Split(strings.TrimSpace(rawVals[10]), "/"), strings.TrimSpace(rawVals[9]))
-        match.RepeatStart, err = strconv.ParseInt(rawVals[11], 10, 64)
+        match.RepeatStart, err = strconv.ParseUint(rawVals[11], 10, 64)
         checkError(err)
-        match.RepeatEnd, err = strconv.ParseInt(rawVals[12], 10, 64)
+        match.RepeatEnd, err = strconv.ParseUint(rawVals[12], 10, 64)
         checkError(err)
-        match.RepeatRemains, err = strconv.ParseInt(rawVals[13], 10, 64)
+        match.RepeatRemains, err = strconv.ParseUint(rawVals[13], 10, 64)
         checkError(err)
-        match.RepeatID, err = strconv.ParseInt(rawVals[14], 10, 64)
+        repeatID, err = strconv.ParseInt(rawVals[14], 10, 32)
         checkError(err)
+        match.RepeatID = int32(repeatID)
 
         // necessary swaps to convert reverse complement repeat indexes to positive-strand indexes
         if match.IsRevComp {
@@ -295,18 +298,18 @@ func GenerateRepeatGenome(genomeName string, k, m uint8) *RepeatGenome {
     return repeatGenome
 }
 
-func (matches Matches) getRepeats() (Repeats, map[string]int64) {
+func (matches Matches) getRepeats() (Repeats, map[string]int32) {
     // we now populate a list of unique repeat types
     // repeats are stored in the below slice, indexed by their ID
     // we first determine the necessary size of the slice - we can't use append because matches are not sorted by repeatID
-    var repeatsSize int64 = 1
+    var repeatsSize int32 = 1
     for i := range matches {
-        repeatsSize = max64(repeatsSize, matches[i].RepeatID+1)
+        repeatsSize = max32(repeatsSize, matches[i].RepeatID+1)
     }
     repeats := make(Repeats, repeatsSize)
 
     // maps a repeat's category to its ID
-    repeatMap := make(map[string](int64))
+    repeatMap := make(map[string](int32))
     // we now assign the actual repeats
     for i := range matches {
         id := matches[i].RepeatID
@@ -396,6 +399,13 @@ func max(a int, b int) int {
     }
 }
 
+func max32(a int32, b int32) int32 {
+    if a > b {
+        return a
+    } else {
+        return b
+    }
+}
 func max64(a int64, b int64) int64 {
     if a > b {
         return a
@@ -683,9 +693,9 @@ func (minimizers Minimizers) Write(genomeName string) {
 
 // some of the logic in here is deeply nested or non-obvious for efficiency's sake
 // specifically, we made sure not to make any heap allocations, which means reverse complements can never be explicitly evaluated
-func MinimizeThread(repeatGenome *RepeatGenome, k, m uint8, matchStart, matchEnd int64, c chan MinPair) {
+func MinimizeThread(repeatGenome *RepeatGenome, k, m uint8, matchStart, matchEnd uint64, c chan MinPair) {
     //startTime := time.Now()
-    var start, end int64
+    var start, end uint64
     var seqName string
     var seq, possMin, currMin, kmer, realMin []byte
     var minOffset, x uint8
@@ -748,7 +758,7 @@ func MinimizeThread(repeatGenome *RepeatGenome, k, m uint8, matchStart, matchEnd
                 m,
                 isRevComp,
                 repeatGenome.ClassTree.ClassNodes[repeatGenome.Matches[i].FullName],
-                map[int64]int32{repeatGenome.Matches[i].RepeatID: 1}},
+                map[int32]int32{repeatGenome.Matches[i].RepeatID: 1}},
                 &repeatGenome.Matches[i]}
         }
     }
@@ -757,10 +767,10 @@ func MinimizeThread(repeatGenome *RepeatGenome, k, m uint8, matchStart, matchEnd
 
 func MinimizeServer(repeatGenome *RepeatGenome, k, m uint8, numCPU int) *Minimizers {
     c := make(chan MinPair, 1000000)
-    var i, mStart, mEnd int64
+    var mStart, mEnd uint64
     for i := 0; i < numCPU; i++ {
-        mStart = int64(i * len(repeatGenome.Matches) / numCPU)
-        mEnd = int64((i + 1) * len(repeatGenome.Matches) / numCPU)
+        mStart = uint64(i * len(repeatGenome.Matches) / numCPU)
+        mEnd = uint64((i + 1) * len(repeatGenome.Matches) / numCPU)
         go MinimizeThread(repeatGenome, k, m, mStart, mEnd, c)
     }
 
@@ -770,6 +780,7 @@ func MinimizeServer(repeatGenome *RepeatGenome, k, m uint8, numCPU int) *Minimiz
     minimizers := make(Minimizers)
     numKmers := repeatGenome.numKmers(k)
     fmt.Println(numKmers, "\t\tkmers to process")
+    var i uint64
     for i = 0; i < numKmers; i++ {
         if i%500000 == 0 {
             fmt.Println(i, "kmers processed")
@@ -788,10 +799,10 @@ func MinimizeServer(repeatGenome *RepeatGenome, k, m uint8, numCPU int) *Minimiz
     return &minimizers
 }
 
-func (repeatGenome RepeatGenome) numKmers(k uint8) int64 {
-    var k_ = int64(k)
-    var matchSize int64
-    var numMins int64 = 0
+func (repeatGenome RepeatGenome) numKmers(k uint8) uint64 {
+    var k_ = uint64(k)
+    var matchSize uint64
+    var numMins uint64 = 0
     for i := range repeatGenome.Matches {
         matchSize = repeatGenome.Matches[i].SeqEnd - repeatGenome.Matches[i].SeqStart
         if matchSize < k_ {
