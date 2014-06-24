@@ -63,9 +63,10 @@ type Match struct {
     SeqRemains    uint64
     IsRevComp     bool
     RepeatClass   []string
-    RepeatStart   uint64
-    RepeatEnd     uint64
-    RepeatRemains uint64
+    // in weird cases, RepeatStart can be negative, so they must be signed
+    RepeatStart   int64
+    RepeatEnd     int64
+    RepeatRemains int64
     RepeatID      int32
 
     // not in parsed data file
@@ -200,11 +201,11 @@ func parseMatches(genomeName string) Matches {
         checkError(err)
         // match.IsComplement, rawVals[8], moved above
         match.RepeatClass = append(strings.Split(strings.TrimSpace(rawVals[10]), "/"), strings.TrimSpace(rawVals[9]))
-        match.RepeatStart, err = strconv.ParseUint(rawVals[11], 10, 64)
+        match.RepeatStart, err = strconv.ParseInt(rawVals[11], 10, 64)
         checkError(err)
-        match.RepeatEnd, err = strconv.ParseUint(rawVals[12], 10, 64)
+        match.RepeatEnd, err = strconv.ParseInt(rawVals[12], 10, 64)
         checkError(err)
-        match.RepeatRemains, err = strconv.ParseUint(rawVals[13], 10, 64)
+        match.RepeatRemains, err = strconv.ParseInt(rawVals[13], 10, 64)
         checkError(err)
         repeatID, err = strconv.ParseInt(rawVals[14], 10, 32)
         checkError(err)
