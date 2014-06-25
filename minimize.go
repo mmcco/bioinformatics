@@ -49,9 +49,6 @@ import (
 
 var err error
 
-// uses 64-bit values, which is probably unnecessary for some fields
-// this is done for simplicity (and strconv compatibility)
-// it should probably be changed eventually
 type Match struct {
     SW_Score      int32
     PercDiv       float64
@@ -70,45 +67,56 @@ type Match struct {
     RepeatID      int32
 
     // not in parsed data file
-    FullName string
+    FullName      string
 }
 
 type RepeatGenome struct {
-    Name string
+    Name         string
     // maps a chromosome name to a map of its sequences
-    Chroms    map[string](map[string][]byte)
-    Kmers []Kmer
+    // as discussed above, though, matches only contain 1D sequence indexes
+    Chroms       map[string](map[string][]byte)
+    K            uint8
+    M            uint8
+    Kmers        []Kmer
     OffsetsToMin map[string]int
-    Matches   Matches
-    ClassTree ClassTree
-    Repeats   Repeats
-    RepeatMap map[string]int32
+    Matches      Matches
+    ClassTree    ClassTree
+    Repeats      Repeats
+    RepeatMap    map[string]int32
 }
 
 type ClassTree struct {
-    // maps all class names to a pointer to their struct
-    // chosen because of this foible in golang: https://code.google.com/p/go/issues/detail?id=3117
-    // may be changed in the future
+    // maps all class names to a pointer to their node struct
+    // we must use pointers because of this foible in golang: https://code.google.com/p/go/issues/detail?id=3117
+    // if we didn't use pointers, we'd have to completely reassign the struct when adding parents, children, etc.
     ClassNodes map[string](*ClassNode)
     // a pointer to the the class tree's root, used for recursive descent etc.
-    Root *ClassNode
+    // we explicitly create the root (because RepeatMatcher doesn't)
+    Root       *ClassNode
 }
 
 type Kmer struct {
-    // should likely be renamed "Seq" or "KmerSeq"
-    Kmer      []byte
+    Seq       []byte
+    // storing the full minimizer here definitely isn't ideal
+    // however, it pushes the significant work (namely memory allocation) of doing so to the MinimizerThreads, ultimately increasing efficiency
+    // we could explore returning a struct containing the minimizer and Kmer, and discarding the prior after using it as an index
     Min       string
     MinOffset uint8
     M         uint8
     IsRevComp bool
     LCA       *ClassNode
-    Count     map[int32]int32
+    CountMap  map[int32]int32
 }
 
 type Repeat struct {
-    ID       int32
-    Class    []string
-    FullName string
+    // assigned by RepeatMasker, in simple incremented order starting from 1
+    // they are therefore not compatible across genomes
+    // we give root ID = 0
+    ID        int32
+    // a list containing the repeat's ancestry path, from top down
+    // root is implicit, and is therefore excluded from the list
+    ClassList []string
+    FullName  string
 }
 
 type ClassNode struct {
@@ -119,17 +127,17 @@ type ClassNode struct {
     IsRoot   bool
 }
 
-// type synonym, necessary to implement interfaces (e.g. sort)
-type Kmers []*Kmer
+// type synonyms, necessary to implement interfaces (e.g. sort) and methods
+type Kmers      []*Kmer
 type Minimizers map[string]Kmers
-
-type Repeats []Repeat
-type Matches []Match
+type Repeats    []Repeat
+type Matches    []Match
 
 //type Chroms map[string](map[string][]byte)
 
-// probably not the best name option
-type MinPair struct {
+// return type of the parallel MinimizeThreads
+// necessary to return both together over a channel
+type KmerAndMatch struct {
     Kmer  *Kmer
     Match *Match
 }
@@ -150,18 +158,21 @@ func lines(byteSlice []byte) (numLines int, lines [][]byte) {
     }
     lines = bytes.Split(byteSlice, []byte{'\n'})
     // drop the trailing newline's line if it's there
-    if len(bytes.TrimSpace(lines[len(lines)-1])) == 0 {
+    lastLine := lines[len(lines) - 1]
+    if len(lastLine) == 1 && lastLine[0] == '\n' {
         lines = lines[:len(lines)-1]
     }
     return numLines, lines
 }
 
 func parseMatches(genomeName string) Matches {
+    // "my_genome_name"  ->  "my_genome_name/my_genome_name.fa.out"
     filepath := strings.Join([]string{genomeName, "/", genomeName, ".fa.out"}, "")
     rawMatchesBytes, err := ioutil.ReadFile(filepath)
     checkError(err)
     _, matchLines := lines(rawMatchesBytes)
     // drop header
+
     matchLines = matchLines[3:]
     var matches Matches
     var sw_Score, repeatID int64
@@ -169,6 +180,9 @@ func parseMatches(genomeName string) Matches {
     for i := range matchLines {
         matchLine := string(matchLines[i])
         rawVals := strings.Fields(matchLine)
+        if len(rawVals) < 15 {
+            fmt.Println("FATAL ERROR: match line supplied to parseMatches() less than 15 fields long.")
+        }
         var match Match
         match.IsRevComp = rawVals[8] == "C"
 
@@ -213,8 +227,9 @@ func parseMatches(genomeName string) Matches {
 
         // necessary swaps to convert reverse complement repeat indexes to positive-strand indexes
         if match.IsRevComp {
-            match.RepeatStart, match.RepeatEnd, match.RepeatRemains =
-                match.RepeatRemains, match.RepeatStart, match.RepeatRemains+(match.RepeatEnd-match.RepeatStart)
+            match.RepeatStart = match.RepeatRemains
+            match.RepeatEnd = match.RepeatStart
+            match.RepeatRemains = match.RepeatRemains+(match.RepeatEnd-match.RepeatStart)
         }
 
         // decrement match.SeqStart and match.RepeatStart so that they work from a start index of 0 rather than 1
@@ -226,11 +241,11 @@ func parseMatches(genomeName string) Matches {
         if match.RepeatClass[0] == "Other" || match.RepeatClass[0] == "Unknown" {
             match.RepeatClass = match.RepeatClass[1:]
         }
+
         match.FullName = strings.Join(match.RepeatClass, "/")
 
         matches = append(matches, match)
     }
-
     return matches
 }
 
@@ -240,8 +255,9 @@ func parseGenome(genomeName string) map[string](map[string][]byte) {
     chroms := make(map[string](map[string][]byte))
     // used below to store the two keys for RepeatGenome.chroms
     for i := range chromFileInfos {
+        // "my_genome_name", "my_chrom_name"  ->  "my_genome_name/my_chrom_name"
         chromFilename := strings.Join([]string{genomeName, chromFileInfos[i].Name()}, "/")
-        // process the ref genome files (*.fa), not the repeat ref files (*.fa.out and *.fa.align)
+        // process the ref genome files (*.fa), not the repeat ref files (*.fa.out and *.fa.align) or anything else
         if strings.HasSuffix(chromFilename, ".fa") {
             rawSeqBytes, err := ioutil.ReadFile(chromFilename)
             checkError(err)
@@ -255,6 +271,10 @@ func parseGenome(genomeName string) map[string](map[string][]byte) {
                 seqLine := bytes.TrimSpace(seqLines[i])
                 if seqLine[0] == byte('>') {
                     seqName = string(bytes.TrimSpace(seqLine[1:]))
+                    if string(seqName) != genomeName {
+                        fmt.Println("WARNING: reference genome is two-dimensional, containing sequences not named after their chromosome.")
+                        fmt.Println("Because RepeatMasker supplied only one-dimensional indexing, this may cause unexpected behavior or program failure.")
+                    }
                 } else {
                     seqMap[seqName] = append(seqMap[seqName], seqLine)
                 }
@@ -271,31 +291,20 @@ func parseGenome(genomeName string) map[string](map[string][]byte) {
 }
 
 func GenerateRepeatGenome(genomeName string, k, m uint8) *RepeatGenome {
+    // we popoulate the RepeatGenome mostly with helper functions
+    // we should consider whether it makes more sense for them to alter the object directly, than to return their results
     repeatGenome := new(RepeatGenome)
     repeatGenome.Name = genomeName
     repeatGenome.Chroms = parseGenome(genomeName)
     repeatGenome.Matches = parseMatches(genomeName)
     repeatGenome.Repeats, repeatGenome.RepeatMap = repeatGenome.Matches.getRepeats()
     repeatGenome.ClassTree = repeatGenome.Repeats.getClassTree()
+    repeatGenome.K = k
+    repeatGenome.M = m
 
-    runtime.GOMAXPROCS(runtime.NumCPU())
-    minimizers := MinimizeServer(repeatGenome, k, m, runtime.NumCPU())
-    minimizers.Write(genomeName)
+    // calling the parallel minimizer and writing the result
+    repeatGenome.MinimizeServer(true)
 
-    for _, kmers := range *minimizers {
-        sort.Sort(kmers)
-    }
-    repeatGenome.OffsetsToMin = make(map[string]int)
-    minSeqs := []string{}
-    for key, _ := range *minimizers {
-        minSeqs = append(minSeqs, key)
-    }
-    for i := range minSeqs {
-        repeatGenome.OffsetsToMin[minSeqs[i]] = len(repeatGenome.Kmers)
-        for j := range (*minimizers)[minSeqs[i]] {
-            repeatGenome.Kmers = append(repeatGenome.Kmers, *(*minimizers)[minSeqs[i]][j])
-        }
-    }
     return repeatGenome
 }
 
@@ -317,7 +326,7 @@ func (matches Matches) getRepeats() (Repeats, map[string]int32) {
         // don't bother overwriting
         if repeats[id].ID == 0 {
             repeats[id].ID = id
-            repeats[id].Class = matches[i].RepeatClass
+            repeats[id].ClassList = matches[i].RepeatClass
             // "Other" or "Unknown" are meaningless categories, so all its children should be connected to root
             // !!! we should probably check in the future if "Other" or "Unknown" appear at ancestry levels other than the first
             // that all repeats descend from root is implicit - root is excluded from the slice
@@ -424,11 +433,11 @@ func min(a, b int) int {
 }
 
 func (repeat Repeat) Print() {
-    for j := range repeat.Class {
+    for j := range repeat.ClassList {
         for j_ := 0; j_ < j; j_++ {
             fmt.Printf("\t")
         }
-        fmt.Printf("%s\n", repeat.Class[j])
+        fmt.Printf("%s\n", repeat.ClassList[j])
     }
     fmt.Println()
 }
@@ -476,8 +485,8 @@ func (repeats Repeats) getClassTree() ClassTree {
         // ignore the null indices
         if repeats[i].ID != 0 {
             // process every heirarchy level (e.g. for "DNA/LINE/TiGGER", process "DNA", then "DNA/LINE", then "DNA/LINE/TiGGER")
-            for j := 1; j <= len(repeats[i].Class); j++ {
-                thisClass := repeats[i].Class[:j]
+            for j := 1; j <= len(repeats[i].ClassList); j++ {
+                thisClass := repeats[i].ClassList[:j]
                 thisClassName := strings.Join(thisClass, "/")
                 var keyExists bool
                 _, keyExists = classNodes[thisClassName]
@@ -558,7 +567,7 @@ func (refGenome RepeatGenome) PrintChromInfo() {
 // if it does not exist, nil is returned
 func (minimizers Minimizers) getKmer(minimizer string, kmer []byte) *Kmer {
     for i := range minimizers[minimizer] {
-        if bytes.Equal(minimizers[minimizer][i].Kmer, kmer) {
+        if bytes.Equal(minimizers[minimizer][i].Seq, kmer) {
             return minimizers[minimizer][i]
         }
     }
@@ -656,7 +665,7 @@ func (kmers Kmers) Swap(i, j int) {
 }
 
 func (kmers Kmers) Less(i, j int) bool {
-    return seqLessThan(kmers[i].Kmer, kmers[j].Kmer)
+    return seqLessThan(kmers[i].Seq, kmers[j].Seq)
 }
 
 func boolToInt(a bool) int {
@@ -682,9 +691,9 @@ func (minimizers Minimizers) Write(genomeName string) {
         _, err = fmt.Fprintf(writer, ">%s\n", thisMin)
         checkError(err)
         for i := range kmers {
-            _, err = fmt.Fprintf(writer, "\t%s %d %d\n", kmers[i].Kmer, kmers[i].MinOffset, boolToInt(kmers[i].IsRevComp))
+            _, err = fmt.Fprintf(writer, "\t%s %d %d\n", kmers[i].Seq, kmers[i].MinOffset, boolToInt(kmers[i].IsRevComp))
             checkError(err)
-            for repeatID, count := range kmers[i].Count {
+            for repeatID, count := range kmers[i].CountMap {
                 _, err = fmt.Fprintf(writer, "\t\t%d %d\n", repeatID, count)
                 checkError(err)
             }
@@ -694,13 +703,15 @@ func (minimizers Minimizers) Write(genomeName string) {
 
 // some of the logic in here is deeply nested or non-obvious for efficiency's sake
 // specifically, we made sure not to make any heap allocations, which means reverse complements can never be explicitly evaluated
-func MinimizeThread(repeatGenome *RepeatGenome, k, m uint8, matchStart, matchEnd uint64, c chan MinPair) {
+func MinimizeThread(repeatGenome *RepeatGenome, k, m uint8, matchStart, matchEnd uint64, c chan KmerAndMatch) {
     //startTime := time.Now()
     var start, end uint64
     var seqName string
     var seq, possMin, currMin, kmer, realMin []byte
     var minOffset, x uint8
+    var y int
     var isRevComp bool
+    n := byte('n')
 
     for i := matchStart; i < matchEnd; i++ {
         start, end, seqName = repeatGenome.Matches[i].SeqStart, repeatGenome.Matches[i].SeqEnd, repeatGenome.Matches[i].SeqName
@@ -710,6 +721,12 @@ func MinimizeThread(repeatGenome *RepeatGenome, k, m uint8, matchStart, matchEnd
         seq = repeatGenome.Chroms[seqName][seqName][start:end]
         for j := 0; j <= len(seq)-int(k); j++ {
             kmer = seq[j : j+int(k)]
+            // ignore kmers containing n's
+            for y = range kmer {
+                if kmer[y] == n {
+                    continue
+                }
+            }
             // we have to calculate the first minimizer from scratch
             minOffset, isRevComp = getMinimizer(kmer, m)
             currMin = kmer[minOffset : minOffset+m]
@@ -753,7 +770,7 @@ func MinimizeThread(repeatGenome *RepeatGenome, k, m uint8, matchStart, matchEnd
                 realMin = currMin
             }
 
-            c <- MinPair{&Kmer{kmer,
+            c <- KmerAndMatch{&Kmer{kmer,
                 string(realMin),
                 minOffset,
                 m,
@@ -766,38 +783,60 @@ func MinimizeThread(repeatGenome *RepeatGenome, k, m uint8, matchStart, matchEnd
     //fmt.Println("Thread life:", time.Since(startTime))
 }
 
-func MinimizeServer(repeatGenome *RepeatGenome, k, m uint8, numCPU int) *Minimizers {
-    c := make(chan MinPair, 1000000)
+func (repeatGenome RepeatGenome) MinimizeServer(writeMins bool) {
+    // a rudimentary way of deciding how many threads to allow, should eventually be improved
+    runtime.GOMAXPROCS(runtime.NumCPU())
+    numCPU := runtime.NumCPU()
+    c := make(chan KmerAndMatch, 1000000)
     var mStart, mEnd uint64
     for i := 0; i < numCPU; i++ {
         mStart = uint64(i * len(repeatGenome.Matches) / numCPU)
         mEnd = uint64((i + 1) * len(repeatGenome.Matches) / numCPU)
-        go MinimizeThread(repeatGenome, k, m, mStart, mEnd, c)
+        go MinimizeThread(&repeatGenome, repeatGenome.K, repeatGenome.M, mStart, mEnd, c)
     }
 
     var kmer, existingKmer *Kmer
     var match *Match
-    var minPair MinPair
+    var kmerAndMatch KmerAndMatch
     minimizers := make(Minimizers)
-    numKmers := repeatGenome.numKmers(k)
+    numKmers := repeatGenome.numKmers(repeatGenome.K)
     fmt.Println(numKmers, "\t\tkmers to process")
     var i uint64
     for i = 0; i < numKmers; i++ {
         if i%500000 == 0 {
             fmt.Println(i, "kmers processed")
         }
-        minPair = <-c
-        kmer, match = minPair.Kmer, minPair.Match
-        existingKmer = minimizers.getKmer(kmer.Min, kmer.Kmer)
+        kmerAndMatch = <-c
+        kmer, match = kmerAndMatch.Kmer, kmerAndMatch.Match
+        existingKmer = minimizers.getKmer(kmer.Min, kmer.Seq)
         if existingKmer != nil {
             // this shows a bit of a wart in the data structures - do we want each match to store a pointer to its ClassNode?
-            existingKmer.Count[match.RepeatID]++
+            existingKmer.CountMap[match.RepeatID]++
             existingKmer.LCA = repeatGenome.ClassTree.getLCA(existingKmer.LCA, kmer.LCA)
         } else {
             minimizers[kmer.Min] = append(minimizers[kmer.Min], kmer)
         }
     }
-    return &minimizers
+
+    if writeMins {
+        minimizers.Write(repeatGenome.Name)
+    }
+
+    for _, kmers := range minimizers {
+        sort.Sort(kmers)
+    }
+
+    repeatGenome.OffsetsToMin = make(map[string]int)
+    minSeqs := []string{}
+    for key, _ := range minimizers {
+        minSeqs = append(minSeqs, key)
+    }
+    for i := range minSeqs {
+        repeatGenome.OffsetsToMin[minSeqs[i]] = len(repeatGenome.Kmers)
+        for j := range minimizers[minSeqs[i]] {
+            repeatGenome.Kmers = append(repeatGenome.Kmers, *minimizers[minSeqs[i]][j])
+        }
+    }
 }
 
 func (repeatGenome RepeatGenome) numKmers(k uint8) uint64 {
@@ -817,9 +856,9 @@ func (repeatGenome RepeatGenome) numKmers(k uint8) uint64 {
 
 func (kmer Kmer) getMin() []byte {
     if kmer.IsRevComp {
-        return revComp(kmer.Kmer[kmer.MinOffset : kmer.MinOffset+kmer.M])
+        return revComp(kmer.Seq[kmer.MinOffset : kmer.MinOffset+kmer.M])
     } else {
-        return kmer.Kmer[kmer.MinOffset : kmer.MinOffset+kmer.M]
+        return kmer.Seq[kmer.MinOffset : kmer.MinOffset+kmer.M]
     }
 }
 
