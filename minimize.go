@@ -157,9 +157,9 @@ func lines(byteSlice []byte) (numLines int, lines [][]byte) {
         }
     }
     lines = bytes.Split(byteSlice, []byte{'\n'})
-    // drop the trailing newline's line if it's there
-    lastLine := lines[len(lines) - 1]
-    if len(lastLine) == 1 && lastLine[0] == '\n' {
+    // drop the trailing newlines
+    newline := []byte("\n")
+    for lastLine := lines[len(lines) - 1]; len(lines) > 0 && (len(lastLine) == 0 || bytes.Equal(lastLine, newline)); lastLine = lines[len(lines) - 1] {
         lines = lines[:len(lines)-1]
     }
     return numLines, lines
@@ -181,7 +181,8 @@ func parseMatches(genomeName string) Matches {
         matchLine := string(matchLines[i])
         rawVals := strings.Fields(matchLine)
         if len(rawVals) < 15 {
-            fmt.Println("FATAL ERROR: match line supplied to parseMatches() less than 15 fields long.")
+            fmt.Printf("FATAL ERROR: match line supplied to parseMatches() less than 15 fields long (has %d fields and length %d):\n", len(rawVals), len(matchLine))
+            log.Fatal(matchLine)
         }
         var match Match
         match.IsRevComp = rawVals[8] == "C"
@@ -252,6 +253,7 @@ func parseMatches(genomeName string) Matches {
 func parseGenome(genomeName string) map[string](map[string][]byte) {
     chromFileInfos, err := ioutil.ReadDir(genomeName)
     checkError(err)
+    warned := false
     chroms := make(map[string](map[string][]byte))
     // used below to store the two keys for RepeatGenome.chroms
     for i := range chromFileInfos {
@@ -271,9 +273,10 @@ func parseGenome(genomeName string) map[string](map[string][]byte) {
                 seqLine := bytes.TrimSpace(seqLines[i])
                 if seqLine[0] == byte('>') {
                     seqName = string(bytes.TrimSpace(seqLine[1:]))
-                    if string(seqName) != genomeName {
+                    if !warned && string(seqName) != genomeName {
                         fmt.Println("WARNING: reference genome is two-dimensional, containing sequences not named after their chromosome.")
                         fmt.Println("Because RepeatMasker supplied only one-dimensional indexing, this may cause unexpected behavior or program failure.")
+                        warned = true
                     }
                 } else {
                     seqMap[seqName] = append(seqMap[seqName], seqLine)
@@ -864,90 +867,108 @@ func (kmer Kmer) getMin() []byte {
 
 func main() {
 
-    var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to file")
+    if len(os.Args) < 2 {
+        fmt.Println("arg error - usage: ./minimize <flags> <reference genome dir>")
+        os.Exit(1)
+    }
+    genomeName := os.Args[len(os.Args) - 1]
 
+    cpuprofile := flag.Bool("profile", false, "write cpu profile to file")
+    debug := flag.Bool("debug", false, "run and print debugging tests")
+    k_arg := flag.Uint("k", 31, "kmer length")
+    m_arg := flag.Uint("m", 15, "minimizer length")
     flag.Parse()
-    if *cpuprofile != "" {
-        f, err := os.Create(*cpuprofile)
-        if err != nil {
-            log.Fatal(err)
-        }
+
+    if *cpuprofile {
+        fmt.Println("profiler enabled")
+        f, err := os.Create(genomeName + ".prof")
+        checkError(err)
         pprof.StartCPUProfile(f)
         defer pprof.StopCPUProfile()
     } else {
-        fmt.Println("profiler off")
+        fmt.Println("profiler disabled")
     }
 
-    if len(os.Args) < 2 {
-        fmt.Println(len(os.Args), "args supplied")
-        fmt.Println("arg error - usage: ./minimize <reference genome dir>")
-        os.Exit(1)
+    if *debug {
+        fmt.Println("debug tests enabled")
+    } else {
+        fmt.Println("debug tests disabled")
     }
-    genomeName := os.Args[2]
-    var k uint8 = 31
-    var m uint8 = 15
+
+    var k, m uint8
+    if *k_arg > 255 || *m_arg > 255 {
+        log.Fatal("k and m must be >= 255")
+    } else {
+        k = uint8(*k_arg)
+        m = uint8(*m_arg)
+        fmt.Println("k =", k)
+        fmt.Println("m =", m)
+    }
+
     repeatGenome := GenerateRepeatGenome(genomeName, k, m)
 
-    // below are testing statements
 
-    fmt.Println()
-    for k, v := range repeatGenome.Chroms {
-        for k_, v_ := range v {
-            fmt.Printf("chrom: %s\tseq: %s\t%s...%s\n", k, k_, v_[:20], v_[len(v_)-20:])
-        }
-    }
-    fmt.Println()
+    if *debug {
 
-    fmt.Println()
-    fmt.Println("number of chromosomes parsed:", len(repeatGenome.Chroms))
-    fmt.Println()
-
-    repeatGenome.ClassTree.PrintBranches()
-    fmt.Println()
-    fmt.Println("number of ClassNodes:", len(repeatGenome.ClassTree.ClassNodes))
-    fmt.Println()
-    fmt.Println("seqLessThan('aacct', 'aacct'):", seqLessThan([]byte("aacct"), []byte("aacct")))
-    fmt.Println("seqLessThan('aacca', 'aaccg'):", seqLessThan([]byte("aacca"), []byte("aaccg")))
-    fmt.Println("seqLessThan('aacct', 'aacca'):", seqLessThan([]byte("aacct"), []byte("aacca")))
-    fmt.Println()
-    fmt.Println("testRevComp('aacct', 'aacct'):", testRevComp([]byte("aacct"), []byte("aacct")))
-    fmt.Println("testRevComp('aacca', 'aaccg'):", testRevComp([]byte("aacca"), []byte("aaccg")))
-    fmt.Println("testRevComp('aacct', 'aacca'):", testRevComp([]byte("aacct"), []byte("aacca")))
-    fmt.Println()
-    fmt.Println("testTwoRevComps('aacct', 'aacct'):", testTwoRevComps([]byte("aacct"), []byte("aacct")))
-    fmt.Println("testTwoRevComps('aacca', 'aaccg'):", testTwoRevComps([]byte("aacca"), []byte("aaccg")))
-    fmt.Println("testTwoRevComps('aacct', 'aacca'):", testTwoRevComps([]byte("aacct"), []byte("aacca")))
-
-    //fmt.Println("classTree.getLCA(classTree.ClassNodes['DNA/TcMar-Mariner'], classTree.ClassNodes['DNA/TcMar-Tc1']):", classTree.getLCA(classTree.ClassNodes["DNA/TcMar-Mariner"], classTree.ClassNodes["DNA/TcMar-Tc1"]))
-
-    fmt.Println()
-    fmt.Println("min(5, 7):", min(5, 7))
-    fmt.Println("max64(int64(5), int64(7)):", max64(int64(5), int64(7)))
-    fmt.Println()
-
-    minOffset, isRevComp := getMinimizer([]byte("tgctcctgtcatgcatacgcaggtcatgcat"), 15)
-    fmt.Println("getMinimizer('tgctcctgtcatgcatacgcaggtcatgcat', 15):", minOffset, isRevComp)
-    //fmt.Println("testTwoRevComps('atttat', 'aattat'):", testTwoRevComps([]byte("atttat"), []byte("atttaa")))
-    //fmt.Println("testRevComp('atttat', 'atttaa'):", testRevComp([]byte("atttat"), []byte("atttaa")))
-
-    //fmt.Println("getMinimizer(\"ataggatcacgac\", 4) =", getMinimizer("ataggatcacgac", 4))
-    fmt.Println("revComp(\"aaAtGctACggT\") =", revComp([]byte("aaAtGctACggT")))
-
-    fmt.Println()
-    fmt.Println("number of CPUs available:", runtime.NumCPU())
-
-    /*
-    fmt.Println()
-    fmt.Println("expected number of kmers:", repeatGenome.numKmers(k))
-    var numKmers int32 = 0
-    for _, v := range minimizers {
-        for i := range v {
-            for _, count := range v[i].Count {
-                numKmers += count
+        fmt.Println()
+        for k, v := range repeatGenome.Chroms {
+            for k_, v_ := range v {
+                fmt.Printf("chrom: %s\tseq: %s\t%s...%s\n", k, k_, v_[:20], v_[len(v_)-20:])
             }
         }
+        fmt.Println()
+
+        fmt.Println()
+        fmt.Println("number of chromosomes parsed:", len(repeatGenome.Chroms))
+        fmt.Println()
+
+        repeatGenome.ClassTree.PrintBranches()
+        fmt.Println()
+        fmt.Println("number of ClassNodes:", len(repeatGenome.ClassTree.ClassNodes))
+        fmt.Println()
+        fmt.Println("seqLessThan('aacct', 'aacct'):", seqLessThan([]byte("aacct"), []byte("aacct")))
+        fmt.Println("seqLessThan('aacca', 'aaccg'):", seqLessThan([]byte("aacca"), []byte("aaccg")))
+        fmt.Println("seqLessThan('aacct', 'aacca'):", seqLessThan([]byte("aacct"), []byte("aacca")))
+        fmt.Println()
+        fmt.Println("testRevComp('aacct', 'aacct'):", testRevComp([]byte("aacct"), []byte("aacct")))
+        fmt.Println("testRevComp('aacca', 'aaccg'):", testRevComp([]byte("aacca"), []byte("aaccg")))
+        fmt.Println("testRevComp('aacct', 'aacca'):", testRevComp([]byte("aacct"), []byte("aacca")))
+        fmt.Println()
+        fmt.Println("testTwoRevComps('aacct', 'aacct'):", testTwoRevComps([]byte("aacct"), []byte("aacct")))
+        fmt.Println("testTwoRevComps('aacca', 'aaccg'):", testTwoRevComps([]byte("aacca"), []byte("aaccg")))
+        fmt.Println("testTwoRevComps('aacct', 'aacca'):", testTwoRevComps([]byte("aacct"), []byte("aacca")))
+
+        //fmt.Println("classTree.getLCA(classTree.ClassNodes['DNA/TcMar-Mariner'], classTree.ClassNodes['DNA/TcMar-Tc1']):", classTree.getLCA(classTree.ClassNodes["DNA/TcMar-Mariner"], classTree.ClassNodes["DNA/TcMar-Tc1"]))
+
+        fmt.Println()
+        fmt.Println("min(5, 7):", min(5, 7))
+        fmt.Println("max64(int64(5), int64(7)):", max64(int64(5), int64(7)))
+        fmt.Println()
+
+        minOffset, isRevComp := getMinimizer([]byte("tgctcctgtcatgcatacgcaggtcatgcat"), 15)
+        fmt.Println("getMinimizer('tgctcctgtcatgcatacgcaggtcatgcat', 15):", minOffset, isRevComp)
+        //fmt.Println("testTwoRevComps('atttat', 'aattat'):", testTwoRevComps([]byte("atttat"), []byte("atttaa")))
+        //fmt.Println("testRevComp('atttat', 'atttaa'):", testRevComp([]byte("atttat"), []byte("atttaa")))
+
+        //fmt.Println("getMinimizer(\"ataggatcacgac\", 4) =", getMinimizer("ataggatcacgac", 4))
+        fmt.Println("revComp(\"aaAtGctACggT\") =", revComp([]byte("aaAtGctACggT")))
+
+        fmt.Println()
+        fmt.Println("number of CPUs available:", runtime.NumCPU())
+
+        /*
+        fmt.Println()
+        fmt.Println("expected number of kmers:", repeatGenome.numKmers(k))
+        var numKmers int32 = 0
+        for _, v := range minimizers {
+            for i := range v {
+                for _, count := range v[i].Count {
+                    numKmers += count
+                }
+            }
+        }
+        fmt.Println("number of kmers minimized:", numKmers)
+        fmt.Println()
+        */
     }
-    fmt.Println("number of kmers minimized:", numKmers)
-    fmt.Println()
-    */
 }
