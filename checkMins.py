@@ -16,8 +16,11 @@ if __name__ == "__main__":
         numLines = 0
 
         for line in f:
+
             if numLines % 1000000 == 0:
                 print (numLines / 1000000), "million lines processed"
+            numLines += 1
+
             if line[0] == '>':
                 currMin = line[1:-1]
             elif line[:2] == "\t\t" or len(line.split()) < 3:

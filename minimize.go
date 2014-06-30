@@ -44,16 +44,33 @@ import (
     "os"
     "runtime"
     "runtime/pprof"
-    "sort"
+    //"sort"
     "strconv"
     "strings"
     "sync"
-    //"time"
+    "time"
     //"math"
 )
 
 var err error
 
+var DEBUG *bool
+
+// Match.SW_Score - Smith-Waterman score, describing the likeness to the repeat reference sequence
+// Match.PercDiv
+// Match.PercDel
+// Match.PercIns
+// Match.SeqName -  the reference genome file this match came from (typically the chromosome)
+// Match.SeqStart -  the starting index (inclusive) in the reference genome
+// Match.SeqEnd -  the ending index (exclusive) in the reference genome
+// Match.SeqRemains
+// Match.IsRevComp -  the match may be for the complement of the reference sequence
+// Match.RepeatClass - the repeat's full ancestry, including its repeat class and repeat name (which are listed separately in the RepeatMasker output file)
+// Match.RepeatStart-  the starting index in the repeat consensus sequence
+// Match.RepeatEnd -  the ending sequence (exclusive) in the repeat consensus sequence
+// Match.RepeatRemains
+// Match.RepeatID - a numerical ID for the repeat type (starts at 1)
+//     Match.Fullname - not in parsed data file - simply repeatClass concatenated - used for map indexing
 type Match struct {
     SW_Score      int32
     PercDiv       float64
@@ -69,9 +86,8 @@ type Match struct {
     RepeatStart   int64
     RepeatEnd     int64
     RepeatRemains int64
-    RepeatID      int32
+    RepeatID      uint32
 
-    // not in parsed data file
     FullName      string
 }
 
@@ -87,7 +103,7 @@ type RepeatGenome struct {
     Matches      Matches
     ClassTree    ClassTree
     Repeats      Repeats
-    RepeatMap    map[string]int32
+    RepeatMap    map[string]uint32
     // maps kmers to their minimizers to prevent needless recomputation
     MinCache     MinCache 
 }
@@ -102,26 +118,32 @@ type ClassTree struct {
     Root       *ClassNode
 }
 
+type InstanceCount struct {
+    Repeat *Repeat 
+    Count  uint64
+}
+
 type Kmer struct {
-    Seq       string
+    Seq             string
     // storing the full minimizer here definitely isn't ideal
     // however, it pushes the significant work (namely memory allocation) of doing so to the MinimizerThreads, ultimately increasing efficiency
     // we could explore returning a struct containing the minimizer and Kmer, and discarding the prior after using it as an index
-    Min       string
-    MinOffset uint8
-    IsRevComp bool
-    LCA       *ClassNode
-    CountMap  map[int32]int32
+    Min             string
+    MinOffset       uint8
+    IsRevComp       bool
+    LCA             *ClassNode
+    InstanceCounter []InstanceCount
 }
 
 type Repeat struct {
     // assigned by RepeatMasker, in simple incremented order starting from 1
     // they are therefore not compatible across genomes
     // we give root ID = 0
-    ID        int32
+    ID        uint32
     // a list containing the repeat's ancestry path, from top down
     // root is implicit, and is therefore excluded from the list
     ClassList []string
+    ClassNode *ClassNode
     FullName  string
 }
 
@@ -147,8 +169,8 @@ type MinCache struct {
 }
 
 type ThreadResponse struct {
-    Kmer *Kmer
-    Relative *ClassNode
+    Kmer     *Kmer
+    Relative *Repeat
 }
 
 func checkError(err error) {
@@ -233,7 +255,7 @@ func parseMatches(genomeName string) Matches {
         checkError(err)
         repeatID, err = strconv.ParseInt(rawVals[14], 10, 32)
         checkError(err)
-        match.RepeatID = int32(repeatID)
+        match.RepeatID = uint32(repeatID)
 
         // necessary swaps to convert reverse complement repeat indexes to positive-strand indexes
         if match.IsRevComp {
@@ -323,18 +345,18 @@ func GenerateRepeatGenome(genomeName string, k, m uint8) *RepeatGenome {
     return repeatGenome
 }
 
-func (matches Matches) getRepeats() (Repeats, map[string]int32) {
+func (matches Matches) getRepeats() (Repeats, map[string]uint32) {
     // we now populate a list of unique repeat types
     // repeats are stored in the below slice, indexed by their ID
     // we first determine the necessary size of the slice - we can't use append because matches are not sorted by repeatID
-    var repeatsSize int32 = 1
+    var repeatsSize uint32 = 1
     for i := range matches {
-        repeatsSize = max32(repeatsSize, matches[i].RepeatID+1)
+        repeatsSize = maxU32(repeatsSize, matches[i].RepeatID+1)
     }
     repeats := make(Repeats, repeatsSize)
 
     // maps a repeat's category to its ID
-    repeatMap := make(map[string](int32))
+    repeatMap := make(map[string](uint32))
     // we now assign the actual repeats
     for i := range matches {
         id := matches[i].RepeatID
@@ -394,7 +416,8 @@ func getMinimizer(kmer string, m uint8) (uint8, bool) {
 
 func revComp(seq string) string {
     var revCompSeq = make([]byte, 0, len(seq))
-    for i := range seq {
+    // !!! DO NOT use range notation here - doing so is inefficient, converting the string to a []rune
+    for i := 0; i < len(seq); i++ {
         switch seq[len(seq)-i-1] {
         case 'a':
             revCompSeq = append(revCompSeq, 't')
@@ -431,6 +454,15 @@ func max32(a int32, b int32) int32 {
         return b
     }
 }
+
+func maxU32(a uint32, b uint32) uint32 {
+    if a > b {
+        return a
+    } else {
+        return b
+    }
+}
+
 func max64(a int64, b int64) int64 {
     if a > b {
         return a
@@ -489,19 +521,19 @@ func classSliceContains(a_s []*ClassNode, b *ClassNode) bool {
 }
 
 // returns a pointer to the root of the tree a map of ClassNode names to ClassNode pointers
-func (repeats Repeats) getClassTree() ClassTree {
+func (repeats *Repeats) getClassTree() ClassTree {
     // mapping to pointers allows us to make references (i.e. pointers) to values
     classNodes := make(map[string](*ClassNode))
     // would be prettier if expanded
     root := &ClassNode{"root", []string{"root"}, nil, nil, true}
     classNodes["root"] = root
     // all but Name is left nil
-    for i := 1; i < len(repeats); i++ {
+    for i := 1; i < len(*repeats); i++ {
         // ignore the null indices
-        if repeats[i].ID != 0 {
+        if (*repeats)[i].ID != 0 {
             // process every heirarchy level (e.g. for "DNA/LINE/TiGGER", process "DNA", then "DNA/LINE", then "DNA/LINE/TiGGER")
-            for j := 1; j <= len(repeats[i].ClassList); j++ {
-                thisClass := repeats[i].ClassList[:j]
+            for j := 1; j <= len((*repeats)[i].ClassList); j++ {
+                thisClass := (*repeats)[i].ClassList[:j]
                 thisClassName := strings.Join(thisClass, "/")
                 var keyExists bool
                 _, keyExists = classNodes[thisClassName]
@@ -526,9 +558,15 @@ func (repeats Repeats) getClassTree() ClassTree {
             }
         }
     }
+
+    for i := range *repeats {
+        (*repeats)[i].ClassNode = classNodes[(*repeats)[i].FullName]
+    }
+
     return ClassTree{classNodes, root}
 }
 
+// returns ancestry list, from self to root
 func (cn *ClassNode) getAncestry() []*ClassNode {
     // condition to prevent nil dereference of Root.Parent
     if cn.IsRoot {
@@ -542,10 +580,14 @@ func (cn *ClassNode) getAncestry() []*ClassNode {
 }
 
 func (classTree *ClassTree) getLCA(cnA, cnB *ClassNode) *ClassNode {
-    ancestryA, ancestryB := cnA.getAncestry(), cnB.getAncestry()
-    for i := range ancestryA {
-        if classSliceContains(ancestryB, ancestryA[i]) {
-            return ancestryA[i]
+    ancestryA := cnA.getAncestry()
+    cnBWalker := cnB
+    var i int
+    for cnBWalker != classTree.Root {
+        for i = 0; i < len(ancestryA); i++ {
+            if cnBWalker == ancestryA[i] {
+                return cnBWalker
+            }
         }
     }
     // necessary for compilation - Root should be in the ancestry paths
@@ -555,7 +597,13 @@ func (classTree *ClassTree) getLCA(cnA, cnB *ClassNode) *ClassNode {
 // The logic for determining the minimizer
 // Currently, it uses simple lexicographic ordering
 func seqLessThan(a, b string) bool {
-    size := min(len(a), len(b))
+    // min function manually inlined for speed - dubious
+    var size int
+    if len(a) < len(b) {
+        size = len(a)
+    } else {
+        size = len(b)
+    }
     for i := 0; i < size; i++ {
         if a[i] < b[i] {
             return true
@@ -565,6 +613,18 @@ func seqLessThan(a, b string) bool {
         }
     }
     return false
+}
+
+func (repeats *Repeats) Write(filename string) {
+    outfile, err := os.Create(filename)
+    checkError(err)
+    defer outfile.Close()
+
+    for i := range *repeats {
+        if int((*repeats)[i].ID) == i {
+            fmt.Fprintf(outfile, "%d %s\n", (*repeats)[i].ID, (*repeats)[i].FullName)
+        }
+    }
 }
 
 func (refGenome *RepeatGenome) PrintChromInfo() {
@@ -595,7 +655,8 @@ func (minimizers Minimizers) getKmer(minimizer string, kmerSeq string) *Kmer {
 // this is used so that a new string doesn't have to be dynamically allocated for the rev. comp.
 func testRevComp(a, b string) bool {
     var revCompChar byte
-    for i := range a {
+    // !!! DO NOT use range notation here - doing so is inefficient, converting the string to a []rune
+    for i := 0; i < len(a); i++ {
         switch a[len(a)-i-1] {
         case 'a':
             revCompChar = 't'
@@ -609,9 +670,8 @@ func testRevComp(a, b string) bool {
         case 'g':
             revCompChar = 'c'
             break
-        case 'n':
-            revCompChar = 'n'
-            break
+        default:
+            log.Fatal("FATAL ERROR: rune other than 'a', 't', 'c', or 'g' passed to testRevComp()")
         }
         if revCompChar < b[i] {
             return true
@@ -625,6 +685,7 @@ func testRevComp(a, b string) bool {
 // returns true only if the reverse complement of the first sequence is smaller than that of the second
 func testTwoRevComps(a, b string) bool {
     var charA, charB byte
+    // !!! DO NOT use range notation here - doing so is inefficient, converting the string to a []rune
     for i := len(a) - 1; i >= 0; i-- {
         switch a[i] {
         case 'a':
@@ -639,9 +700,8 @@ func testTwoRevComps(a, b string) bool {
         case 'g':
             charA = 'c'
             break
-        case 'n':
-            charA = 'n'
-            break
+        default:
+            log.Fatal("FATAL ERROR: rune other than 'a', 't', 'c', or 'g' passed to testTwoRevComps()")
         }
 
         switch b[i] {
@@ -657,9 +717,8 @@ func testTwoRevComps(a, b string) bool {
         case 'g':
             charB = 'c'
             break
-        case 'n':
-            charB = 'n'
-            break
+        default:
+            log.Fatal("FATAL ERROR: rune other than 'a', 't', 'c', or 'g' passed to testTwoRevComps()")
         }
 
         if charA < charB {
@@ -709,18 +768,32 @@ func (minimizers Minimizers) Write(genomeName string) {
         for i := range kmers {
             _, err = fmt.Fprintf(writer, "\t%s %d %d\n", kmers[i].Seq, kmers[i].MinOffset, boolToInt(kmers[i].IsRevComp))
             checkError(err)
-            for repeatID, count := range kmers[i].CountMap {
-                _, err = fmt.Fprintf(writer, "\t\t%d %d\n", repeatID, count)
+            for j := range kmers[i].InstanceCounter {
+                _, err = fmt.Fprintf(writer, "\t\t%d %d\n", kmers[i].InstanceCounter[j].Repeat.ID, kmers[i].InstanceCounter[j].Count)
                 checkError(err)
             }
         }
     }
 }
 
+func (kmer *Kmer) incrCount(repeat *Repeat) {
+    for i := range kmer.InstanceCounter {
+        if kmer.InstanceCounter[i].Repeat.ID == repeat.ID {
+            kmer.InstanceCounter[i].Count++
+            return
+        }
+    }
+    kmer.InstanceCounter = append(kmer.InstanceCounter, InstanceCount{repeat, 1})
+}
+
 // some of the logic in here is deeply nested or non-obvious for efficiency's sake
 // specifically, we made sure not to make any heap allocations, which means reverse complements can never be explicitly evaluated
 func (repeatGenome *RepeatGenome) minimizeThread(minimizers Minimizers, matchStart, matchEnd uint64, c chan ThreadResponse) {
-    //startTime := time.Now()
+    var startTime time.Time
+    if *DEBUG {
+        startTime = time.Now()
+    }
+
     var start, end uint64
     var seqName string
     var seq, possMin, currMin, kmer, realMin string
@@ -761,7 +834,7 @@ func (repeatGenome *RepeatGenome) minimizeThread(minimizers Minimizers, matchSta
                 if existingKmer == nil {
                     log.Fatal("getKmer() returned nil in minimizeThread()")
                 }
-                c <- ThreadResponse{existingKmer, repeatGenome.ClassTree.ClassNodes[match.FullName]}
+                c <- ThreadResponse{existingKmer, &repeatGenome.Repeats[match.RepeatID]}
             } else {
                 // we have to calculate the first minimizer from scratch
                 minOffset, isRevComp = getMinimizer(kmer, m)
@@ -812,13 +885,15 @@ func (repeatGenome *RepeatGenome) minimizeThread(minimizers Minimizers, matchSta
                     minOffset,
                     isRevComp,
                     repeatGenome.ClassTree.ClassNodes[match.FullName],
-                    map[int32]int32{match.RepeatID: 1}}
+                    []InstanceCount{{&repeatGenome.Repeats[match.RepeatID], 1}}}
 
                 c <- ThreadResponse{&newKmer, nil}
             }
         }
     }
-    //fmt.Println("Thread life:", time.Since(startTime))
+    if *DEBUG {
+        fmt.Println("Thread life:", time.Since(startTime))
+    }
 }
 
 func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
@@ -828,8 +903,11 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
     repeatGenome.MinCache.MinCacheMap = make(map[string]string)
     c := make(chan ThreadResponse, 100000)
     var mStart, mEnd uint64
-    var relative *ClassNode
+    var relative *Repeat
     minimizers := make(Minimizers)
+
+    numKmers := repeatGenome.numKmers()
+    fmt.Println("\t\t", numKmers, "kmers")
 
     for i := 0; i < numCPU; i++ {
         mStart = uint64(i * len(repeatGenome.Matches) / numCPU)
@@ -837,13 +915,11 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
         go repeatGenome.minimizeThread(minimizers, mStart, mEnd, c)
     }
 
-    numKmers := repeatGenome.numKmers()
-    fmt.Println("\t\t", numKmers, "kmers")
-
+    // below is the atomic section of minimizing, which is parallel
+    // this seems to be the rate-limiting section, as threads use only ~6-7 CPU-equivalents
+    // it should therefore be optimized before other sections
     var kmer *Kmer
-    var match *Match
     var threadResponse ThreadResponse
-    var exists bool
     var i uint64
     for i = 0; i < numKmers; i++ {
         if i%5000000 == 0 {
@@ -855,13 +931,8 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
             log.Fatal("nil Kmer pointer returned from minimizeThread()")
         }
         if relative != nil {
-            _, exists = kmer.CountMap[match.RepeatID]
-            if exists {
-                kmer.CountMap[match.RepeatID]++
-            } else {
-                kmer.CountMap[match.RepeatID] = 1
-            }
-            kmer.LCA = repeatGenome.ClassTree.getLCA(kmer.LCA, relative)
+            kmer.incrCount(relative)
+            kmer.LCA = repeatGenome.ClassTree.getLCA(kmer.LCA, relative.ClassNode)
         } else {
             repeatGenome.MinCache.Lock()
             minimizers[kmer.Min] = append(minimizers[kmer.Min], kmer)
@@ -872,6 +943,7 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
 
     fmt.Println("all minimizers generated")
 
+    /*
     for _, kmers := range minimizers {
         sort.Sort(kmers)
     }
@@ -891,6 +963,7 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
             repeatGenome.Kmers = append(repeatGenome.Kmers, *minimizers[minSeqs[i]][j])
         }
     }
+    */
 }
 
 func (repeatGenome *RepeatGenome) numKmers() uint64 {
@@ -923,23 +996,34 @@ func main() {
     }
     genomeName := os.Args[len(os.Args) - 1]
 
-    cpuprofile := flag.Bool("profile", false, "write cpu profile to file")
-    debug := flag.Bool("debug", false, "run and print debugging tests")
+    cpuprofile := flag.Bool("cpuprofile", false, "write cpu profile to file")
+    memprofile := flag.Bool("memprofile", false, "write memory profile to this file")
+    DEBUG = flag.Bool("debug", false, "run and print debugging tests")
     k_arg := flag.Uint("k", 31, "kmer length")
     m_arg := flag.Uint("m", 15, "minimizer length")
     flag.Parse()
 
     if *cpuprofile {
-        fmt.Println("profiler enabled")
-        f, err := os.Create(genomeName + ".prof")
+        fmt.Println("CPU profiler enabled")
+        f, err := os.Create(genomeName + ".cpuprof")
         checkError(err)
         pprof.StartCPUProfile(f)
         defer pprof.StopCPUProfile()
     } else {
-        fmt.Println("profiler disabled")
+        fmt.Println("CPU profiler disabled")
     }
 
-    if *debug {
+    if *memprofile {
+        fmt.Println("memory profiler enabled")
+        f, err := os.Create(genomeName + ".memprof")
+        checkError(err)
+        pprof.WriteHeapProfile(f)
+        f.Close()
+    } else {
+        fmt.Println("memory profiler disabled")
+    }
+
+    if *DEBUG {
         fmt.Println("debug tests enabled")
     } else {
         fmt.Println("debug tests disabled")
@@ -958,7 +1042,7 @@ func main() {
     repeatGenome := GenerateRepeatGenome(genomeName, k, m)
 
 
-    if *debug {
+    if *DEBUG {
 
         fmt.Println()
         for k, v := range repeatGenome.Chroms {
