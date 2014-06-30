@@ -13,8 +13,11 @@ if __name__ == "__main__":
     for filename in sys.argv[1:]:
         f = open(filename, "r")
         m = 15
+        numLines = 0
 
         for line in f:
+            if numLines % 1000000 == 0:
+                print (numLines / 1000000), "million lines processed"
             if line[0] == '>':
                 currMin = line[1:-1]
             elif line[:2] == "\t\t" or len(line.split()) < 3:

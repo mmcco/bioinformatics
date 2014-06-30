@@ -11,7 +11,11 @@
 
    Premature commenting is the root of all evil, and I have sinned. Please read comments skeptically.
 
+   I should bring back the Match field documentation from a previous commit
+
    There is no need to be referencing and dereferencing maps across funcs and structs because they're reference types
+
+   Should each match store a pointer to it's ClassNode? Probably.
 
    The IsRevComp values in the output is suspect; should probably double-check that that's working.
 
@@ -79,12 +83,13 @@ type RepeatGenome struct {
     K            uint8
     M            uint8
     Kmers        []Kmer
-    MinsMutex   sync.Mutex
     OffsetsToMin map[string]int
     Matches      Matches
     ClassTree    ClassTree
     Repeats      Repeats
     RepeatMap    map[string]int32
+    // maps kmers to their minimizers to prevent needless recomputation
+    MinCache     MinCache 
 }
 
 type ClassTree struct {
@@ -104,7 +109,6 @@ type Kmer struct {
     // we could explore returning a struct containing the minimizer and Kmer, and discarding the prior after using it as an index
     Min       string
     MinOffset uint8
-    M         uint8
     IsRevComp bool
     LCA       *ClassNode
     CountMap  map[int32]int32
@@ -137,16 +141,14 @@ type Matches    []Match
 
 //type Chroms map[string](map[string][]byte)
 
-// return type of the parallel minimizeThreads
-// necessary to return both together over a channel
-type KmerAndMatch struct {
-    Kmer  *Kmer
-    Match *Match
-}
-
 type MinCache struct {
     MinCacheMap map[string]string
-    Mutex sync.Mutex
+    sync.Mutex
+}
+
+type ThreadResponse struct {
+    Kmer *Kmer
+    Relative *ClassNode
 }
 
 func checkError(err error) {
@@ -584,6 +586,7 @@ func (minimizers Minimizers) getKmer(minimizer string, kmerSeq string) *Kmer {
             return minimizers[minimizer][i]
         }
     }
+    fmt.Println(minimizers[minimizer])
     return nil
 }
 
@@ -716,7 +719,7 @@ func (minimizers Minimizers) Write(genomeName string) {
 
 // some of the logic in here is deeply nested or non-obvious for efficiency's sake
 // specifically, we made sure not to make any heap allocations, which means reverse complements can never be explicitly evaluated
-func (repeatGenome *RepeatGenome) minimizeThread(minimizers Minimizers, minCache *MinCache, matchStart, matchEnd uint64, c chan bool) {
+func (repeatGenome *RepeatGenome) minimizeThread(minimizers Minimizers, matchStart, matchEnd uint64, c chan ThreadResponse) {
     //startTime := time.Now()
     var start, end uint64
     var seqName string
@@ -724,7 +727,7 @@ func (repeatGenome *RepeatGenome) minimizeThread(minimizers Minimizers, minCache
     var minOffset, x uint8
     var y int
     var isRevComp bool
-    var alreadyMinimized, minExists bool
+    var alreadyMinimized bool
     var existingKmer *Kmer
     var match *Match
     n := byte('n')
@@ -750,10 +753,16 @@ func (repeatGenome *RepeatGenome) minimizeThread(minimizers Minimizers, minCache
                 }
             }
 
-            minCache.Mutex.Lock()
-            realMin, alreadyMinimized = minCache.MinCacheMap[kmer]
-            minCache.Mutex.Unlock()
-            if !alreadyMinimized {
+            repeatGenome.MinCache.Lock()
+            realMin, alreadyMinimized = repeatGenome.MinCache.MinCacheMap[kmer]
+            repeatGenome.MinCache.Unlock()
+            if alreadyMinimized {
+                existingKmer = minimizers.getKmer(realMin, kmer)
+                if existingKmer == nil {
+                    log.Fatal("getKmer() returned nil in minimizeThread()")
+                }
+                c <- ThreadResponse{existingKmer, repeatGenome.ClassTree.ClassNodes[match.FullName]}
+            } else {
                 // we have to calculate the first minimizer from scratch
                 minOffset, isRevComp = getMinimizer(kmer, m)
                 currMin = kmer[minOffset : minOffset+m]
@@ -797,84 +806,71 @@ func (repeatGenome *RepeatGenome) minimizeThread(minimizers Minimizers, minCache
                     realMin = currMin
                 }
 
-                minCache.Mutex.Lock()
-                repeatGenome.MinsMutex.Lock()
-                minCache.MinCacheMap[kmer] = realMin
 
-                kmerStruct := Kmer{kmer,
-                    string(realMin),
+                newKmer := Kmer{kmer,
+                    realMin,
                     minOffset,
-                    m,
                     isRevComp,
                     repeatGenome.ClassTree.ClassNodes[match.FullName],
                     map[int32]int32{match.RepeatID: 1}}
-                _, minExists = minimizers[realMin]
-                if minExists {
-                    minimizers[realMin] = append(minimizers[realMin], &kmerStruct)
-                } else {
-                    minimizers[realMin] = Kmers{&kmerStruct}
-                }
-                minCache.Mutex.Unlock()
-                repeatGenome.MinsMutex.Unlock()
-            } else {
-                repeatGenome.MinsMutex.Lock()
-                existingKmer = minimizers.getKmer(realMin, kmer)
-                if existingKmer == nil {
-                    log.Fatal("FATAL ERROR: getKmer() returns nil when kmer logically must exist")
-                }
-                existingKmer.LCA = repeatGenome.ClassTree.getLCA(existingKmer.LCA, repeatGenome.ClassTree.ClassNodes[match.FullName])
-                existingKmer.CountMap[match.RepeatID]++
-                repeatGenome.MinsMutex.Unlock()
+
+                c <- ThreadResponse{&newKmer, nil}
             }
         }
     }
     //fmt.Println("Thread life:", time.Since(startTime))
-    c <- true
 }
 
 func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
     // a rudimentary way of deciding how many threads to allow, should eventually be improved
-    numCPU := min(runtime.NumCPU(), 10)
+    numCPU := runtime.NumCPU()
     runtime.GOMAXPROCS(numCPU)
-    minCache := new(MinCache)
-    minCache.MinCacheMap = make(map[string]string)
-    //c := make(chan KmerAndMatch, 100000)
-    c := make(chan bool)
+    repeatGenome.MinCache.MinCacheMap = make(map[string]string)
+    c := make(chan ThreadResponse, 100000)
     var mStart, mEnd uint64
+    var relative *ClassNode
     minimizers := make(Minimizers)
 
     for i := 0; i < numCPU; i++ {
         mStart = uint64(i * len(repeatGenome.Matches) / numCPU)
         mEnd = uint64((i + 1) * len(repeatGenome.Matches) / numCPU)
-        go repeatGenome.minimizeThread(minimizers, minCache, mStart, mEnd, c)
+        go repeatGenome.minimizeThread(minimizers, mStart, mEnd, c)
     }
 
-    //var kmer, existingKmer *Kmer
-    //var match *Match
-    //var kmerAndMatch KmerAndMatch
     numKmers := repeatGenome.numKmers()
-    fmt.Println("\t\t", numKmers, "kmers to process")
-    /*
+    fmt.Println("\t\t", numKmers, "kmers")
+
+    var kmer *Kmer
+    var match *Match
+    var threadResponse ThreadResponse
+    var exists bool
     var i uint64
     for i = 0; i < numKmers; i++ {
         if i%5000000 == 0 {
             fmt.Println(i / 1000000, "million kmers processed")
         }
-        kmerAndMatch = <-c
-        kmer, match = kmerAndMatch.Kmer, kmerAndMatch.Match
-        existingKmer = minimizers.getKmer(kmer.Min, kmer.Seq)
-        if existingKmer != nil {
-            // this shows a bit of a wart in the data structures - do we want each match to store a pointer to its ClassNode?
-            existingKmer.CountMap[match.RepeatID]++
-            existingKmer.LCA = repeatGenome.ClassTree.getLCA(existingKmer.LCA, kmer.LCA)
+        threadResponse = <- c
+        kmer, relative = threadResponse.Kmer, threadResponse.Relative
+        if kmer == nil {
+            log.Fatal("nil Kmer pointer returned from minimizeThread()")
+        }
+        if relative != nil {
+            _, exists = kmer.CountMap[match.RepeatID]
+            if exists {
+                kmer.CountMap[match.RepeatID]++
+            } else {
+                kmer.CountMap[match.RepeatID] = 1
+            }
+            kmer.LCA = repeatGenome.ClassTree.getLCA(kmer.LCA, relative)
         } else {
+            repeatGenome.MinCache.Lock()
             minimizers[kmer.Min] = append(minimizers[kmer.Min], kmer)
+            repeatGenome.MinCache.MinCacheMap[kmer.Min] = kmer.Min
+            repeatGenome.MinCache.Unlock()
         }
     }
-    */
-    for i := 0; i < numCPU; i++ {
-        <-c
-    }
+
+    fmt.Println("all minimizers generated")
 
     for _, kmers := range minimizers {
         sort.Sort(kmers)
@@ -899,7 +895,6 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
 
 func (repeatGenome *RepeatGenome) numKmers() uint64 {
     var k = int(repeatGenome.K)
-    fmt.Println("k:", k)
     var numKmers uint64 = 0
     var seq string
     seqs := []string{}
@@ -911,14 +906,6 @@ func (repeatGenome *RepeatGenome) numKmers() uint64 {
         match = &repeatGenome.Matches[i]
         seq = repeatGenome.Chroms[match.SeqName][match.SeqName][match.SeqStart : match.SeqEnd]
         seqs = strings.FieldsFunc(seq, splitOnN)
-        sumLen := 0
-        for x := range seqs {
-            sumLen += len(seqs[x])
-        }
-        if sumLen != len(seq) {
-            fmt.Println("len(seq):", len(seq))
-            fmt.Println("total len seqs:", sumLen)
-        }
         for j := range seqs {
             if len(seqs[j]) >= k {
                 numKmers += uint64(len(seqs[j]) - k + 1)
@@ -926,14 +913,6 @@ func (repeatGenome *RepeatGenome) numKmers() uint64 {
         }
     }
     return numKmers
-}
-
-func (kmer *Kmer) getMin() string {
-    if kmer.IsRevComp {
-        return revComp(kmer.Seq[kmer.MinOffset : kmer.MinOffset+kmer.M])
-    } else {
-        return kmer.Seq[kmer.MinOffset : kmer.MinOffset+kmer.M]
-    }
 }
 
 func main() {
