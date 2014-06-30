@@ -43,6 +43,7 @@ import (
     "sort"
     "strconv"
     "strings"
+    "sync"
     //"time"
     //"math"
 )
@@ -74,10 +75,11 @@ type RepeatGenome struct {
     Name         string
     // maps a chromosome name to a map of its sequences
     // as discussed above, though, matches only contain 1D sequence indexes
-    Chroms       map[string](map[string][]byte)
+    Chroms       map[string](map[string]string)
     K            uint8
     M            uint8
     Kmers        []Kmer
+    MinsMutex   sync.Mutex
     OffsetsToMin map[string]int
     Matches      Matches
     ClassTree    ClassTree
@@ -96,7 +98,7 @@ type ClassTree struct {
 }
 
 type Kmer struct {
-    Seq       []byte
+    Seq       string
     // storing the full minimizer here definitely isn't ideal
     // however, it pushes the significant work (namely memory allocation) of doing so to the MinimizerThreads, ultimately increasing efficiency
     // we could explore returning a struct containing the minimizer and Kmer, and discarding the prior after using it as an index
@@ -135,11 +137,16 @@ type Matches    []Match
 
 //type Chroms map[string](map[string][]byte)
 
-// return type of the parallel MinimizeThreads
+// return type of the parallel minimizeThreads
 // necessary to return both together over a channel
 type KmerAndMatch struct {
     Kmer  *Kmer
     Match *Match
+}
+
+type MinCache struct {
+    MinCacheMap map[string]string
+    Mutex sync.Mutex
 }
 
 func checkError(err error) {
@@ -250,18 +257,19 @@ func parseMatches(genomeName string) Matches {
     return matches
 }
 
-func parseGenome(genomeName string) map[string](map[string][]byte) {
+func parseGenome(genomeName string) map[string](map[string]string) {
     chromFileInfos, err := ioutil.ReadDir(genomeName)
     checkError(err)
     warned := false
-    chroms := make(map[string](map[string][]byte))
+    chroms := make(map[string](map[string]string))
     // used below to store the two keys for RepeatGenome.chroms
     for i := range chromFileInfos {
         // "my_genome_name", "my_chrom_name"  ->  "my_genome_name/my_chrom_name"
-        chromFilename := strings.Join([]string{genomeName, chromFileInfos[i].Name()}, "/")
+        chromFilename := chromFileInfos[i].Name()
+        chromFilepath := strings.Join([]string{genomeName, chromFilename}, "/")
         // process the ref genome files (*.fa), not the repeat ref files (*.fa.out and *.fa.align) or anything else
-        if strings.HasSuffix(chromFilename, ".fa") {
-            rawSeqBytes, err := ioutil.ReadFile(chromFilename)
+        if strings.HasSuffix(chromFilepath, ".fa") {
+            rawSeqBytes, err := ioutil.ReadFile(chromFilepath)
             checkError(err)
             numLines, seqLines := lines(rawSeqBytes)
 
@@ -273,9 +281,11 @@ func parseGenome(genomeName string) map[string](map[string][]byte) {
                 seqLine := bytes.TrimSpace(seqLines[i])
                 if seqLine[0] == byte('>') {
                     seqName = string(bytes.TrimSpace(seqLine[1:]))
-                    if !warned && string(seqName) != genomeName {
+                    if !warned && seqName != chromFilename[:len(chromFilename) - 3] {
                         fmt.Println("WARNING: reference genome is two-dimensional, containing sequences not named after their chromosome.")
                         fmt.Println("Because RepeatMasker supplied only one-dimensional indexing, this may cause unexpected behavior or program failure.")
+                        fmt.Println("seqName:", seqName, "\tlen(seqName):", len(seqName))
+                        fmt.Println("chrom name:", chromFilename[:len(chromFilename) - 3], "\tlen(chrom name):", len(chromFilename) - 3)
                         warned = true
                     }
                 } else {
@@ -283,10 +293,10 @@ func parseGenome(genomeName string) map[string](map[string][]byte) {
                 }
             }
             // finally, we insert this map into the full map
-            chromName := chromFilename[len(genomeName)+1 : len(chromFilename)-3]
-            chroms[chromName] = make(map[string][]byte)
+            chromName := chromFilepath[len(genomeName)+1 : len(chromFilepath)-3]
+            chroms[chromName] = make(map[string]string)
             for k, v := range seqMap {
-                chroms[chromName][k] = bytes.ToLower(bytes.Join(v, []byte{}))
+                chroms[chromName][k] = strings.ToLower(string(bytes.Join(v, []byte{})))
             }
         }
     }
@@ -306,7 +316,7 @@ func GenerateRepeatGenome(genomeName string, k, m uint8) *RepeatGenome {
     repeatGenome.M = m
 
     // calling the parallel minimizer and writing the result
-    repeatGenome.MinimizeServer(true)
+    repeatGenome.GetKrakenSlice(true)
 
     return repeatGenome
 }
@@ -343,8 +353,8 @@ func (matches Matches) getRepeats() (Repeats, map[string]int32) {
     return repeats, repeatMap
 }
 
-func getMinimizer(kmer []byte, m uint8) (uint8, bool) {
-    var possMin []byte
+func getMinimizer(kmer string, m uint8) (uint8, bool) {
+    var possMin string
     var i uint8
     var k uint8 = uint8(len(kmer))
     currMin := kmer[:m]
@@ -380,7 +390,7 @@ func getMinimizer(kmer []byte, m uint8) (uint8, bool) {
     return minOffset, isRevComp
 }
 
-func revComp(seq []byte) []byte {
+func revComp(seq string) string {
     var revCompSeq = make([]byte, 0, len(seq))
     for i := range seq {
         switch seq[len(seq)-i-1] {
@@ -401,7 +411,7 @@ func revComp(seq []byte) []byte {
             break
         }
     }
-    return revCompSeq
+    return string(revCompSeq)
 }
 
 func max(a int, b int) int {
@@ -435,7 +445,7 @@ func min(a, b int) int {
     }
 }
 
-func (repeat Repeat) Print() {
+func (repeat *Repeat) Print() {
     for j := range repeat.ClassList {
         for j_ := 0; j_ < j; j_++ {
             fmt.Printf("\t")
@@ -445,13 +455,13 @@ func (repeat Repeat) Print() {
     fmt.Println()
 }
 
-func (classTree ClassTree) PrintTree() {
+func (classTree *ClassTree) PrintTree() {
     classTree.Root.printTreeRec(0, true)
 }
 
 // doesn't print leaves
 // prevents the terminal from being flooded with Unknowns, Others, and Simple Repeats
-func (classTree ClassTree) PrintBranches() {
+func (classTree *ClassTree) PrintBranches() {
     classTree.Root.printTreeRec(0, false)
 }
 
@@ -529,7 +539,7 @@ func (cn *ClassNode) getAncestry() []*ClassNode {
     return ancestry
 }
 
-func (classTree ClassTree) getLCA(cnA, cnB *ClassNode) *ClassNode {
+func (classTree *ClassTree) getLCA(cnA, cnB *ClassNode) *ClassNode {
     ancestryA, ancestryB := cnA.getAncestry(), cnB.getAncestry()
     for i := range ancestryA {
         if classSliceContains(ancestryB, ancestryA[i]) {
@@ -542,7 +552,7 @@ func (classTree ClassTree) getLCA(cnA, cnB *ClassNode) *ClassNode {
 
 // The logic for determining the minimizer
 // Currently, it uses simple lexicographic ordering
-func seqLessThan(a, b []byte) bool {
+func seqLessThan(a, b string) bool {
     size := min(len(a), len(b))
     for i := 0; i < size; i++ {
         if a[i] < b[i] {
@@ -555,7 +565,7 @@ func seqLessThan(a, b []byte) bool {
     return false
 }
 
-func (refGenome RepeatGenome) PrintChromInfo() {
+func (refGenome *RepeatGenome) PrintChromInfo() {
     fmt.Println()
     for k, v := range refGenome.Chroms {
         for k_, v_ := range v {
@@ -568,9 +578,9 @@ func (refGenome RepeatGenome) PrintChromInfo() {
 
 // returns a pointer to the supplied kmer with the supplied minimizer in the supplied map
 // if it does not exist, nil is returned
-func (minimizers Minimizers) getKmer(minimizer string, kmer []byte) *Kmer {
+func (minimizers Minimizers) getKmer(minimizer string, kmerSeq string) *Kmer {
     for i := range minimizers[minimizer] {
-        if bytes.Equal(minimizers[minimizer][i].Seq, kmer) {
+        if minimizers[minimizer][i].Seq == kmerSeq {
             return minimizers[minimizer][i]
         }
     }
@@ -580,7 +590,7 @@ func (minimizers Minimizers) getKmer(minimizer string, kmer []byte) *Kmer {
 // tests the reverse complement of seq against currMin (assumedly the current minimizer)
 // true is returned only if the rev. comp. is lexicographically less than currMin
 // this is used so that a new string doesn't have to be dynamically allocated for the rev. comp.
-func testRevComp(a, b []byte) bool {
+func testRevComp(a, b string) bool {
     var revCompChar byte
     for i := range a {
         switch a[len(a)-i-1] {
@@ -610,7 +620,7 @@ func testRevComp(a, b []byte) bool {
 }
 
 // returns true only if the reverse complement of the first sequence is smaller than that of the second
-func testTwoRevComps(a, b []byte) bool {
+func testTwoRevComps(a, b string) bool {
     var charA, charB byte
     for i := len(a) - 1; i >= 0; i-- {
         switch a[i] {
@@ -706,108 +716,149 @@ func (minimizers Minimizers) Write(genomeName string) {
 
 // some of the logic in here is deeply nested or non-obvious for efficiency's sake
 // specifically, we made sure not to make any heap allocations, which means reverse complements can never be explicitly evaluated
-func MinimizeThread(repeatGenome *RepeatGenome, k, m uint8, matchStart, matchEnd uint64, c chan KmerAndMatch) {
+func (repeatGenome *RepeatGenome) minimizeThread(minimizers Minimizers, minCache *MinCache, matchStart, matchEnd uint64, c chan bool) {
     //startTime := time.Now()
     var start, end uint64
     var seqName string
-    var seq, possMin, currMin, kmer, realMin []byte
+    var seq, possMin, currMin, kmer, realMin string
     var minOffset, x uint8
     var y int
     var isRevComp bool
+    var alreadyMinimized, minExists bool
+    var existingKmer *Kmer
+    var match *Match
     n := byte('n')
+    k := repeatGenome.K
+    m := repeatGenome.M
 
     for i := matchStart; i < matchEnd; i++ {
-        start, end, seqName = repeatGenome.Matches[i].SeqStart, repeatGenome.Matches[i].SeqEnd, repeatGenome.Matches[i].SeqName
+        match = &repeatGenome.Matches[i]
+        start, end, seqName = match.SeqStart, match.SeqEnd, match.SeqName
         // !!! the reference genome is two-dimensional, but RepeatMasker only supplies one sequence name
         // we resolve this ambiguity with the assumption that each chromosome file contains only one sequence
         // this holds true, at least in dm3
         seq = repeatGenome.Chroms[seqName][seqName][start:end]
+
+        KmerLoop:
         for j := 0; j <= len(seq)-int(k); j++ {
             kmer = seq[j : j+int(k)]
+
             // ignore kmers containing n's
             for y = range kmer {
                 if kmer[y] == n {
-                    continue
+                    continue KmerLoop
                 }
-            }
-            // we have to calculate the first minimizer from scratch
-            minOffset, isRevComp = getMinimizer(kmer, m)
-            currMin = kmer[minOffset : minOffset+m]
-            // x is the start index of the current possMin, the minimizer we're testing on this loop
-            for x = 0; x <= k-m; x++ {
-                // below is a potential performance sink - it can be optimized out later if necessary
-                possMin = kmer[x : x+m]
-                // holds the current minimizer
-                // in some cases we can use most of the calculations from the previous kmer
-                // when the previous minimizer isn't in the current kmer, though, we have to start from scratch
-                if minOffset < x {
-                    minOffset, isRevComp = getMinimizer(kmer, m)
-                    currMin = kmer[minOffset : minOffset+m]
-                } else { 
-                    if isRevComp && !testRevComp(currMin, possMin) {
-                        minOffset = x
-                        isRevComp = false
-                        currMin = kmer[minOffset : minOffset+m]
-                    }
-                    if isRevComp && testTwoRevComps(possMin, currMin) {
-                        minOffset = x
-                        isRevComp = true
-                        currMin = kmer[minOffset : minOffset+m]
-                    }
-                    if !isRevComp && seqLessThan(possMin, currMin) {
-                        minOffset = x
-                        isRevComp = false
-                        currMin = kmer[minOffset : minOffset+m]
-                    }
-                    if !isRevComp && testRevComp(possMin, currMin) {
-                        minOffset = x
-                        isRevComp = true
-                        currMin = kmer[minOffset : minOffset+m]
-                    }
-                }
-            }
-            // computationally expensive, so we only do it once at the end
-            if isRevComp {
-                realMin = revComp(currMin)
-            } else {
-                realMin = currMin
             }
 
-            c <- KmerAndMatch{&Kmer{kmer,
-                string(realMin),
-                minOffset,
-                m,
-                isRevComp,
-                repeatGenome.ClassTree.ClassNodes[repeatGenome.Matches[i].FullName],
-                map[int32]int32{repeatGenome.Matches[i].RepeatID: 1}},
-                &repeatGenome.Matches[i]}
+            minCache.Mutex.Lock()
+            realMin, alreadyMinimized = minCache.MinCacheMap[kmer]
+            minCache.Mutex.Unlock()
+            if !alreadyMinimized {
+                // we have to calculate the first minimizer from scratch
+                minOffset, isRevComp = getMinimizer(kmer, m)
+                currMin = kmer[minOffset : minOffset+m]
+                // x is the start index of the current possMin, the minimizer we're testing on this loop
+                for x = 0; x <= k-m; x++ {
+                    // below is a potential performance sink - it can be optimized out later if necessary
+                    possMin = kmer[x : x+m]
+                    // holds the current minimizer
+                    // in some cases we can use most of the calculations from the previous kmer
+                    // when the previous minimizer isn't in the current kmer, though, we have to start from scratch
+                    if minOffset < x {
+                        minOffset, isRevComp = getMinimizer(kmer, m)
+                        currMin = kmer[minOffset : minOffset+m]
+                    } else { 
+                        if isRevComp && !testRevComp(currMin, possMin) {
+                            minOffset = x
+                            isRevComp = false
+                            currMin = kmer[minOffset : minOffset+m]
+                        }
+                        if isRevComp && testTwoRevComps(possMin, currMin) {
+                            minOffset = x
+                            isRevComp = true
+                            currMin = kmer[minOffset : minOffset+m]
+                        }
+                        if !isRevComp && seqLessThan(possMin, currMin) {
+                            minOffset = x
+                            isRevComp = false
+                            currMin = kmer[minOffset : minOffset+m]
+                        }
+                        if !isRevComp && testRevComp(possMin, currMin) {
+                            minOffset = x
+                            isRevComp = true
+                            currMin = kmer[minOffset : minOffset+m]
+                        }
+                    }
+                }
+                // computationally expensive, so we only do it once at the end
+                if isRevComp {
+                    realMin = revComp(currMin)
+                } else {
+                    realMin = currMin
+                }
+
+                minCache.Mutex.Lock()
+                repeatGenome.MinsMutex.Lock()
+                minCache.MinCacheMap[kmer] = realMin
+
+                kmerStruct := Kmer{kmer,
+                    string(realMin),
+                    minOffset,
+                    m,
+                    isRevComp,
+                    repeatGenome.ClassTree.ClassNodes[match.FullName],
+                    map[int32]int32{match.RepeatID: 1}}
+                _, minExists = minimizers[realMin]
+                if minExists {
+                    minimizers[realMin] = append(minimizers[realMin], &kmerStruct)
+                } else {
+                    minimizers[realMin] = Kmers{&kmerStruct}
+                }
+                minCache.Mutex.Unlock()
+                repeatGenome.MinsMutex.Unlock()
+            } else {
+                repeatGenome.MinsMutex.Lock()
+                existingKmer = minimizers.getKmer(realMin, kmer)
+                if existingKmer == nil {
+                    log.Fatal("FATAL ERROR: getKmer() returns nil when kmer logically must exist")
+                }
+                existingKmer.LCA = repeatGenome.ClassTree.getLCA(existingKmer.LCA, repeatGenome.ClassTree.ClassNodes[match.FullName])
+                existingKmer.CountMap[match.RepeatID]++
+                repeatGenome.MinsMutex.Unlock()
+            }
         }
     }
     //fmt.Println("Thread life:", time.Since(startTime))
+    c <- true
 }
 
-func (repeatGenome RepeatGenome) MinimizeServer(writeMins bool) {
+func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
     // a rudimentary way of deciding how many threads to allow, should eventually be improved
-    runtime.GOMAXPROCS(runtime.NumCPU())
-    numCPU := runtime.NumCPU()
-    c := make(chan KmerAndMatch, 1000000)
+    numCPU := min(runtime.NumCPU(), 10)
+    runtime.GOMAXPROCS(numCPU)
+    minCache := new(MinCache)
+    minCache.MinCacheMap = make(map[string]string)
+    //c := make(chan KmerAndMatch, 100000)
+    c := make(chan bool)
     var mStart, mEnd uint64
+    minimizers := make(Minimizers)
+
     for i := 0; i < numCPU; i++ {
         mStart = uint64(i * len(repeatGenome.Matches) / numCPU)
         mEnd = uint64((i + 1) * len(repeatGenome.Matches) / numCPU)
-        go MinimizeThread(&repeatGenome, repeatGenome.K, repeatGenome.M, mStart, mEnd, c)
+        go repeatGenome.minimizeThread(minimizers, minCache, mStart, mEnd, c)
     }
 
-    var kmer, existingKmer *Kmer
-    var match *Match
-    var kmerAndMatch KmerAndMatch
-    minimizers := make(Minimizers)
-    numKmers := repeatGenome.numKmers(repeatGenome.K)
-    fmt.Println(numKmers, "\t\tkmers to process")
+    //var kmer, existingKmer *Kmer
+    //var match *Match
+    //var kmerAndMatch KmerAndMatch
+    numKmers := repeatGenome.numKmers()
+    fmt.Println("\t\t", numKmers, "kmers to process")
+    /*
     var i uint64
     for i = 0; i < numKmers; i++ {
-        if i%500000 == 0 {
-            fmt.Println(i, "kmers processed")
+        if i%5000000 == 0 {
+            fmt.Println(i / 1000000, "million kmers processed")
         }
         kmerAndMatch = <-c
         kmer, match = kmerAndMatch.Kmer, kmerAndMatch.Match
@@ -820,13 +871,17 @@ func (repeatGenome RepeatGenome) MinimizeServer(writeMins bool) {
             minimizers[kmer.Min] = append(minimizers[kmer.Min], kmer)
         }
     }
-
-    if writeMins {
-        minimizers.Write(repeatGenome.Name)
+    */
+    for i := 0; i < numCPU; i++ {
+        <-c
     }
 
     for _, kmers := range minimizers {
         sort.Sort(kmers)
+    }
+
+    if writeMins {
+        minimizers.Write(repeatGenome.Name)
     }
 
     repeatGenome.OffsetsToMin = make(map[string]int)
@@ -842,22 +897,38 @@ func (repeatGenome RepeatGenome) MinimizeServer(writeMins bool) {
     }
 }
 
-func (repeatGenome RepeatGenome) numKmers(k uint8) uint64 {
-    var k_ = uint64(k)
-    var matchSize uint64
-    var numMins uint64 = 0
-    for i := range repeatGenome.Matches {
-        matchSize = repeatGenome.Matches[i].SeqEnd - repeatGenome.Matches[i].SeqStart
-        if matchSize < k_ {
+func (repeatGenome *RepeatGenome) numKmers() uint64 {
+    var k = int(repeatGenome.K)
+    fmt.Println("k:", k)
+    var numKmers uint64 = 0
+    var seq string
+    seqs := []string{}
+    var match *Match
 
-        } else {
-            numMins += matchSize - k_ + 1
+    splitOnN := func(c rune) bool {return c == 'n'}
+
+    for i := range repeatGenome.Matches {
+        match = &repeatGenome.Matches[i]
+        seq = repeatGenome.Chroms[match.SeqName][match.SeqName][match.SeqStart : match.SeqEnd]
+        seqs = strings.FieldsFunc(seq, splitOnN)
+        sumLen := 0
+        for x := range seqs {
+            sumLen += len(seqs[x])
+        }
+        if sumLen != len(seq) {
+            fmt.Println("len(seq):", len(seq))
+            fmt.Println("total len seqs:", sumLen)
+        }
+        for j := range seqs {
+            if len(seqs[j]) >= k {
+                numKmers += uint64(len(seqs[j]) - k + 1)
+            }
         }
     }
-    return numMins
+    return numKmers
 }
 
-func (kmer Kmer) getMin() []byte {
+func (kmer *Kmer) getMin() string {
     if kmer.IsRevComp {
         return revComp(kmer.Seq[kmer.MinOffset : kmer.MinOffset+kmer.M])
     } else {
@@ -926,17 +997,17 @@ func main() {
         fmt.Println()
         fmt.Println("number of ClassNodes:", len(repeatGenome.ClassTree.ClassNodes))
         fmt.Println()
-        fmt.Println("seqLessThan('aacct', 'aacct'):", seqLessThan([]byte("aacct"), []byte("aacct")))
-        fmt.Println("seqLessThan('aacca', 'aaccg'):", seqLessThan([]byte("aacca"), []byte("aaccg")))
-        fmt.Println("seqLessThan('aacct', 'aacca'):", seqLessThan([]byte("aacct"), []byte("aacca")))
+        fmt.Println("seqLessThan('aacct', 'aacct'):", seqLessThan("aacct", "aacct"))
+        fmt.Println("seqLessThan('aacca', 'aaccg'):", seqLessThan("aacca", "aaccg"))
+        fmt.Println("seqLessThan('aacct', 'aacca'):", seqLessThan("aacct", "aacca"))
         fmt.Println()
-        fmt.Println("testRevComp('aacct', 'aacct'):", testRevComp([]byte("aacct"), []byte("aacct")))
-        fmt.Println("testRevComp('aacca', 'aaccg'):", testRevComp([]byte("aacca"), []byte("aaccg")))
-        fmt.Println("testRevComp('aacct', 'aacca'):", testRevComp([]byte("aacct"), []byte("aacca")))
+        fmt.Println("testRevComp('aacct', 'aacct'):", testRevComp("aacct", "aacct"))
+        fmt.Println("testRevComp('aacca', 'aaccg'):", testRevComp("aacca", "aaccg"))
+        fmt.Println("testRevComp('aacct', 'aacca'):", testRevComp("aacct", "aacca"))
         fmt.Println()
-        fmt.Println("testTwoRevComps('aacct', 'aacct'):", testTwoRevComps([]byte("aacct"), []byte("aacct")))
-        fmt.Println("testTwoRevComps('aacca', 'aaccg'):", testTwoRevComps([]byte("aacca"), []byte("aaccg")))
-        fmt.Println("testTwoRevComps('aacct', 'aacca'):", testTwoRevComps([]byte("aacct"), []byte("aacca")))
+        fmt.Println("testTwoRevComps('aacct', 'aacct'):", testTwoRevComps("aacct", "aacct"))
+        fmt.Println("testTwoRevComps('aacca', 'aaccg'):", testTwoRevComps("aacca", "aaccg"))
+        fmt.Println("testTwoRevComps('aacct', 'aacca'):", testTwoRevComps("aacct", "aacca"))
 
         //fmt.Println("classTree.getLCA(classTree.ClassNodes['DNA/TcMar-Mariner'], classTree.ClassNodes['DNA/TcMar-Tc1']):", classTree.getLCA(classTree.ClassNodes["DNA/TcMar-Mariner"], classTree.ClassNodes["DNA/TcMar-Tc1"]))
 
@@ -945,13 +1016,13 @@ func main() {
         fmt.Println("max64(int64(5), int64(7)):", max64(int64(5), int64(7)))
         fmt.Println()
 
-        minOffset, isRevComp := getMinimizer([]byte("tgctcctgtcatgcatacgcaggtcatgcat"), 15)
+        minOffset, isRevComp := getMinimizer("tgctcctgtcatgcatacgcaggtcatgcat", 15)
         fmt.Println("getMinimizer('tgctcctgtcatgcatacgcaggtcatgcat', 15):", minOffset, isRevComp)
         //fmt.Println("testTwoRevComps('atttat', 'aattat'):", testTwoRevComps([]byte("atttat"), []byte("atttaa")))
         //fmt.Println("testRevComp('atttat', 'atttaa'):", testRevComp([]byte("atttat"), []byte("atttaa")))
 
         //fmt.Println("getMinimizer(\"ataggatcacgac\", 4) =", getMinimizer("ataggatcacgac", 4))
-        fmt.Println("revComp(\"aaAtGctACggT\") =", revComp([]byte("aaAtGctACggT")))
+        fmt.Println("revComp(\"aaAtGctACggT\") =", revComp("aaAtGctACggT"))
 
         fmt.Println()
         fmt.Println("number of CPUs available:", runtime.NumCPU())
