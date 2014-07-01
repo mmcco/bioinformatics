@@ -11,19 +11,7 @@
 
    Premature commenting is the root of all evil, and I have sinned. Please read comments skeptically.
 
-   I should bring back the Match field documentation from a previous commit
-
-   There is no need to be referencing and dereferencing maps across funcs and structs because they're reference types
-
-   Should each match store a pointer to it's ClassNode? Probably.
-
-   The IsRevComp values in the output is suspect; should probably double-check that that's working.
-
    Should reconsider what is a pointer and what is directly referenced
-
-   Should probably add a warning for actual 2D ref genomes
-
-   Should review where []byte is used and where string is used
 
    For caching efficiency, we should change the minimizer data structure to a map-indexed 1D slice of Kmers (not *Kmers). (This technique originated in Kraken.)
 
