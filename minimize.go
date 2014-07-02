@@ -15,6 +15,12 @@
 
    Should reconsider what is a pointer and what is directly referenced
 
+   All sequences containing Ns are currently ignored.
+
+   We should consider taking end minimizers once the code base is more mature.
+
+   We should also review how to deal with m <= len(match) < k.
+
    For caching efficiency, we should change the minimizer data structure to a map-indexed 1D slice of Kmers (not *Kmers). (This technique originated in Kraken.)
 
    Int sizes should be reviewed for memory efficiency.
@@ -128,6 +134,12 @@ type Kmer struct {
     InstanceCounter []InstanceCount
 }
 
+type FastKmer struct {
+    SeqInt uint64
+    LCA *ClassNode
+    InstanceCounter []InstanceCount
+}
+
 type Repeat struct {
     // assigned by RepeatMasker, in simple incremented order starting from 1
     // they are therefore not compatible across genomes
@@ -170,6 +182,58 @@ func checkError(err error) {
     if err != nil {
         log.Fatal(err)
     }
+}
+
+func seqToInt(seq string) uint64 {
+    if len(seq) < 1 || len(seq) > 31 {
+        panic("seqToInt() can only int-ize sequences where 0 < length < 32")
+    }
+    var seqInt uint64
+    for i := range seq {
+        seqInt = seqInt << 2
+        switch seq[i] {
+        case 'a':
+            break
+        case 'c':
+            seqInt = seqInt | 1
+            break
+        case 'g':
+            seqInt = seqInt | 2
+            break
+        case 't':
+            seqInt = seqInt | 3
+            break
+        default:
+            panic("byte other than 'a', 'c', 'g', or 't' passed to seqToInt()")
+        }
+    }
+    return seqInt
+}
+
+func revCompToInt(seq string) uint64 {
+    if len(seq) < 1 || len(seq) > 31 {
+        panic("revCompToInt() can only int-ize sequences where 0 < length < 32")
+    }
+    var seqInt uint64
+    for i := range seq {
+        seqInt = seqInt << 2
+        switch seq[len(seq) - (i + 1)] {
+        case 'a':
+            seqInt = seqInt | 3
+            break
+        case 'c':
+            seqInt = seqInt | 2
+            break
+        case 'g':
+            seqInt = seqInt | 1
+            break
+        case 't':
+            break
+        default:
+            panic("byte other than 'a', 'c', 'g', or 't' passed to revCompToInt()")
+        }
+    }
+    return seqInt
 }
 
 // returns the number of lines and a slice of the lines
@@ -777,14 +841,17 @@ func (minMap MinMap) Write(genomeName string) {
         for i := range kmers {
             _, err = fmt.Fprintf(writer, "\t%s %d %d %s\n", kmers[i].Seq, kmers[i].MinOffset, boolToInt(kmers[i].IsRevComp), kmers[i].LCA.Name)
             checkError(err)
+            /*
             for j := range kmers[i].InstanceCounter {
                 _, err = fmt.Fprintf(writer, "\t\t%d %d\n", kmers[i].InstanceCounter[j].Repeat.ID, kmers[i].InstanceCounter[j].Count)
                 checkError(err)
             }
+            */
         }
     }
 }
 
+/*
 func (kmer *Kmer) incrCount(repeat *Repeat) {
     for i := range kmer.InstanceCounter {
         if kmer.InstanceCounter[i].Repeat.ID == repeat.ID {
@@ -794,6 +861,7 @@ func (kmer *Kmer) incrCount(repeat *Repeat) {
     }
     kmer.InstanceCounter = append(kmer.InstanceCounter, InstanceCount{repeat, 1})
 }
+*/
 
 // some of the logic in here is deeply nested or non-obvious for efficiency's sake
 // specifically, we made sure not to make any heap allocations, which means reverse complements can never be explicitly evaluated
@@ -955,18 +1023,20 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
 
     fmt.Println("all minimizers generated")
 
-    for _, v := range repeatGenome.ClassTree.ClassNodes {
-        if v == nil {
-            fmt.Println(v)
-            log.Fatal("nil ClassNode")
+    if *DEBUG {
+        for k, v := range repeatGenome.ClassTree.ClassNodes {
+            if v == nil {
+                fmt.Println(v)
+                log.Fatal("nil ClassNode", k)
+            }
         }
-    }
-    
-    for _, v := range minMap {
-        for i := range v {
-            if v[i].LCA == nil {
-                fmt.Println(v[i])
-                log.Fatal("nil LCA")
+        
+        for _, v := range minMap {
+            for i := range v {
+                if v[i].LCA == nil {
+                    fmt.Println(v[i])
+                    log.Fatal("nil LCA in kmer", v[i].Seq)
+                }
             }
         }
     }
