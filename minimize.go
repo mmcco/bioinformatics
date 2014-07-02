@@ -3,6 +3,8 @@
 
    A barebones (at the moment) Go script for parsing and minimizing repeats
 
+   https://gist.github.com/anonymous/aaabfb1b9a6e8b10c687
+
    This script expects there to be a subdirectory of the current directory named after the reference genome used (e.g. "dm3") that contains the following files:
        * a RepeatMasker library containing:
            - the match library (e.g. "dm3.fa.out")
@@ -42,7 +44,9 @@ import (
 
 var err error
 
-var DEBUG *bool
+var DEBUG      *bool
+var CPUPROFILE *bool
+var MEMPROFILE *bool
 
 // Match.SW_Score - Smith-Waterman score, describing the likeness to the repeat reference sequence
 // Match.PercDiv
@@ -77,6 +81,7 @@ type Match struct {
     RepeatID      uint32
 
     FullName      string
+    ClassNode     *ClassNode
 }
 
 type RepeatGenome struct {
@@ -191,10 +196,25 @@ func parseMatches(genomeName string) Matches {
     checkError(err)
     _, matchLines := lines(rawMatchesBytes)
     // drop header
-
     matchLines = matchLines[3:]
+
     var matches Matches
     var sw_Score, repeatID int64
+    repeatMap := make(map[uint32]string)
+
+    var maxRepeatID uint32 = 1
+    for i := range matchLines {
+        matchLine := string(matchLines[i])
+        rawVals := strings.Fields(matchLine)
+        if len(rawVals) < 15 {
+            fmt.Printf("FATAL ERROR: match line supplied to parseMatches() less than 15 fields long (has %d fields and length %d):\n", len(rawVals), len(matchLine))
+            log.Fatal(matchLine)
+        }
+        repeatID, err := strconv.ParseUint(strings.TrimSpace(rawVals[14]), 10, 32)
+        checkError(err)
+        maxRepeatID = maxU32(maxRepeatID, uint32(repeatID))
+    }
+    var customRepeatID uint32 = maxRepeatID + 1
 
     for i := range matchLines {
         matchLine := string(matchLines[i])
@@ -264,6 +284,11 @@ func parseMatches(genomeName string) Matches {
 
         match.FullName = strings.Join(match.RepeatClass, "/")
 
+        if repeatMap[match.RepeatID] != match.FullName {
+            match.RepeatID = customRepeatID
+            customRepeatID++
+        }
+
         matches = append(matches, match)
     }
     return matches
@@ -322,8 +347,8 @@ func GenerateRepeatGenome(genomeName string, k, m uint8) *RepeatGenome {
     repeatGenome.Name = genomeName
     repeatGenome.Chroms = parseGenome(genomeName)
     repeatGenome.Matches = parseMatches(genomeName)
-    repeatGenome.Repeats, repeatGenome.RepeatMap = repeatGenome.Matches.getRepeats()
-    repeatGenome.ClassTree = repeatGenome.Repeats.getClassTree()
+    repeatGenome.getRepeats()
+    repeatGenome.getClassTree()
     repeatGenome.K = k
     repeatGenome.M = m
 
@@ -333,36 +358,29 @@ func GenerateRepeatGenome(genomeName string, k, m uint8) *RepeatGenome {
     return repeatGenome
 }
 
-func (matches Matches) getRepeats() (Repeats, map[string]uint32) {
+func (repeatGenome *RepeatGenome) getRepeats() {
     // we now populate a list of unique repeat types
     // repeats are stored in the below slice, indexed by their ID
     // we first determine the necessary size of the slice - we can't use append because matches are not sorted by repeatID
     var repeatsSize uint32 = 1
-    for i := range matches {
-        repeatsSize = maxU32(repeatsSize, matches[i].RepeatID+1)
+    for i := range repeatGenome.Matches {
+        repeatsSize = maxU32(repeatsSize, repeatGenome.Matches[i].RepeatID+1)
     }
-    repeats := make(Repeats, repeatsSize)
+    repeatGenome.Repeats = make(Repeats, repeatsSize)
 
     // maps a repeat's category to its ID
-    repeatMap := make(map[string](uint32))
+    repeatGenome.RepeatMap = make(map[string](uint32))
     // we now assign the actual repeats
-    for i := range matches {
-        id := matches[i].RepeatID
+    for i := range repeatGenome.Matches {
+        id := repeatGenome.Matches[i].RepeatID
         // don't bother overwriting
-        if repeats[id].ID == 0 {
-            repeats[id].ID = id
-            repeats[id].ClassList = matches[i].RepeatClass
-            // "Other" or "Unknown" are meaningless categories, so all its children should be connected to root
-            // !!! we should probably check in the future if "Other" or "Unknown" appear at ancestry levels other than the first
-            // that all repeats descend from root is implicit - root is excluded from the slice
-            //if repeats[id].Class[0] == "Other" || repeats[id].Class[0] == "Unknown" {
-            //    repeats[id].Class = repeats[id].Class[1:]
-            //}
-            repeats[id].FullName = matches[i].FullName
-            repeatMap[repeats[id].FullName] = id
+        if repeatGenome.Repeats[id].ID == 0 {
+            repeatGenome.Repeats[id].ID = id
+            repeatGenome.Repeats[id].ClassList = repeatGenome.Matches[i].RepeatClass
+            repeatGenome.Repeats[id].FullName = repeatGenome.Matches[i].FullName
+            repeatGenome.RepeatMap[repeatGenome.Repeats[id].FullName] = id
         }
     }
-    return repeats, repeatMap
 }
 
 func getMinimizer(kmer string, m uint8) (uint8, bool) {
@@ -508,50 +526,53 @@ func classSliceContains(a_s []*ClassNode, b *ClassNode) bool {
     return false
 }
 
-// returns a pointer to the root of the tree a map of ClassNode names to ClassNode pointers
-func (repeats *Repeats) getClassTree() ClassTree {
+func (repeatGenome *RepeatGenome) getClassTree() {
     // mapping to pointers allows us to make references (i.e. pointers) to values
-    classNodes := make(map[string](*ClassNode))
+    repeatGenome.ClassTree.ClassNodes = make(map[string](*ClassNode))
     // would be prettier if expanded
-    root := &ClassNode{"root", []string{"root"}, nil, nil, true}
-    classNodes["root"] = root
-    // all but Name is left nil
-    for i := 1; i < len(*repeats); i++ {
+    repeatGenome.ClassTree.Root = &ClassNode{"root", []string{"root"}, nil, nil, true}
+    repeatGenome.ClassTree.ClassNodes["root"] = repeatGenome.ClassTree.Root
+    for i := 1; i < len(repeatGenome.Repeats); i++ {
         // ignore the null indices
-        if (*repeats)[i].ID != 0 {
+        if repeatGenome.Repeats[i].ID != 0 {
             // process every heirarchy level (e.g. for "DNA/LINE/TiGGER", process "DNA", then "DNA/LINE", then "DNA/LINE/TiGGER")
-            for j := 1; j <= len((*repeats)[i].ClassList); j++ {
-                thisClass := (*repeats)[i].ClassList[:j]
+            for j := 1; j <= len(repeatGenome.Repeats[i].ClassList); j++ {
+                thisClass := repeatGenome.Repeats[i].ClassList[:j]
                 thisClassName := strings.Join(thisClass, "/")
-                var keyExists bool
-                _, keyExists = classNodes[thisClassName]
+                _, keyExists := repeatGenome.ClassTree.ClassNodes[thisClassName]
                 if !keyExists {
                     thisClassNode := new(ClassNode)
                     thisClassNode.Name = thisClassName
                     thisClassNode.Class = thisClass
                     thisClassNode.IsRoot = false
-                    classNodes[thisClassName] = thisClassNode
+                    repeatGenome.ClassTree.ClassNodes[thisClassName] = thisClassNode
                     // first case handles primary classes, as root is implicit and not listed in thisClass
                     if j == 1 {
-                        classNodes[thisClassName].Parent = root
+                        repeatGenome.ClassTree.ClassNodes[thisClassName].Parent = repeatGenome.ClassTree.Root
                     } else {
-                        classNodes[thisClassName].Parent = classNodes[strings.Join(thisClass[:len(thisClass)-1], "/")]
+                        repeatGenome.ClassTree.ClassNodes[thisClassName].Parent = repeatGenome.ClassTree.ClassNodes[strings.Join(thisClass[:len(thisClass)-1], "/")]
                     }
-                    parent := classNodes[thisClassName].Parent
+                    parent := repeatGenome.ClassTree.ClassNodes[thisClassName].Parent
                     if parent.Children == nil {
                         parent.Children = make([]*ClassNode, 0)
                     }
-                    parent.Children = append(parent.Children, classNodes[thisClassName])
+                    parent.Children = append(parent.Children, repeatGenome.ClassTree.ClassNodes[thisClassName])
                 }
             }
         }
     }
 
-    for i := range *repeats {
-        (*repeats)[i].ClassNode = classNodes[(*repeats)[i].FullName]
+    for i := range repeatGenome.Repeats {
+        repeatGenome.Repeats[i].ClassNode = repeatGenome.ClassTree.ClassNodes[repeatGenome.Repeats[i].FullName]
     }
 
-    return ClassTree{classNodes, root}
+    for i := range repeatGenome.Matches {
+        repeatGenome.Matches[i].ClassNode = repeatGenome.ClassTree.ClassNodes[repeatGenome.Matches[i].FullName]
+        if repeatGenome.Matches[i].ClassNode == nil {
+            fmt.Println(repeatGenome.Matches[i].FullName)
+            log.Fatal("nil match ClassNode")
+        }
+    }
 }
 
 // returns ancestry list, from self to root
@@ -754,7 +775,7 @@ func (minMap MinMap) Write(genomeName string) {
         _, err = fmt.Fprintf(writer, ">%s\n", thisMin)
         checkError(err)
         for i := range kmers {
-            _, err = fmt.Fprintf(writer, "\t%s %d %d\n", kmers[i].Seq, kmers[i].MinOffset, boolToInt(kmers[i].IsRevComp))
+            _, err = fmt.Fprintf(writer, "\t%s %d %d %s\n", kmers[i].Seq, kmers[i].MinOffset, boolToInt(kmers[i].IsRevComp), kmers[i].LCA.Name)
             checkError(err)
             for j := range kmers[i].InstanceCounter {
                 _, err = fmt.Fprintf(writer, "\t\t%d %d\n", kmers[i].InstanceCounter[j].Repeat.ID, kmers[i].InstanceCounter[j].Count)
@@ -872,7 +893,7 @@ func (repeatGenome *RepeatGenome) minimizeThread(minMap MinMap, matchStart, matc
                     realMin,
                     minOffset,
                     isRevComp,
-                    repeatGenome.ClassTree.ClassNodes[match.FullName],
+                    match.ClassNode,
                     []InstanceCount{{&repeatGenome.Repeats[match.RepeatID], 1}}}
 
                 c <- ThreadResponse{&newKmer, nil}
@@ -887,6 +908,9 @@ func (repeatGenome *RepeatGenome) minimizeThread(minMap MinMap, matchStart, matc
 func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
     // a rudimentary way of deciding how many threads to allow, should eventually be improved
     numCPU := runtime.NumCPU()
+    if *DEBUG {
+        fmt.Printf("using %d CPUs\n", numCPU)
+    }
     runtime.GOMAXPROCS(numCPU)
     repeatGenome.MinCache.MinCacheMap = make(map[string]string)
     c := make(chan ThreadResponse, 100000)
@@ -931,6 +955,22 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
 
     fmt.Println("all minimizers generated")
 
+    for _, v := range repeatGenome.ClassTree.ClassNodes {
+        if v == nil {
+            fmt.Println(v)
+            log.Fatal("nil ClassNode")
+        }
+    }
+    
+    for _, v := range minMap {
+        for i := range v {
+            if v[i].LCA == nil {
+                fmt.Println(v[i])
+                log.Fatal("nil LCA")
+            }
+        }
+    }
+
     minimizers := []string{}
     for minimizer, kmers := range minMap {
         minimizers = append(minimizers, minimizer)
@@ -951,6 +991,13 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
 
     if writeMins {
         minMap.Write(repeatGenome.Name)
+    }
+
+    if *MEMPROFILE {
+        f, err := os.Create(repeatGenome.Name + ".memprof")
+        checkError(err)
+        pprof.WriteHeapProfile(f)
+        f.Close()
     }
 }
 
@@ -984,14 +1031,14 @@ func main() {
     }
     genomeName := os.Args[len(os.Args) - 1]
 
-    cpuprofile := flag.Bool("cpuprofile", false, "write cpu profile to file")
-    memprofile := flag.Bool("memprofile", false, "write memory profile to this file")
+    CPUPROFILE = flag.Bool("cpuprof", false, "write cpu profile to file")
+    MEMPROFILE = flag.Bool("memprof", false, "write memory profile to this file")
     DEBUG = flag.Bool("debug", false, "run and print debugging tests")
     k_arg := flag.Uint("k", 31, "kmer length")
     m_arg := flag.Uint("m", 15, "minimizer length")
     flag.Parse()
 
-    if *cpuprofile {
+    if *CPUPROFILE {
         fmt.Println("CPU profiler enabled")
         f, err := os.Create(genomeName + ".cpuprof")
         checkError(err)
@@ -1001,12 +1048,8 @@ func main() {
         fmt.Println("CPU profiler disabled")
     }
 
-    if *memprofile {
+    if *MEMPROFILE {
         fmt.Println("memory profiler enabled")
-        f, err := os.Create(genomeName + ".memprof")
-        checkError(err)
-        pprof.WriteHeapProfile(f)
-        f.Close()
     } else {
         fmt.Println("memory profiler disabled")
     }
@@ -1028,7 +1071,6 @@ func main() {
     }
 
     repeatGenome := GenerateRepeatGenome(genomeName, k, m)
-
 
     if *DEBUG {
 
@@ -1074,9 +1116,6 @@ func main() {
 
         //fmt.Println("getMinimizer(\"ataggatcacgac\", 4) =", getMinimizer("ataggatcacgac", 4))
         fmt.Println("revComp(\"aaAtGctACggT\") =", revComp("aaAtGctACggT"))
-
-        fmt.Println()
-        fmt.Println("number of CPUs available:", runtime.NumCPU())
 
         /*
         fmt.Println()
