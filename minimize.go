@@ -669,6 +669,7 @@ func (classTree *ClassTree) getLCA(cnA, cnB *ClassNode) *ClassNode {
                 return cnBWalker
             }
         }
+        cnBWalker = cnBWalker.Parent
     }
     // necessary for compilation - Root should be in the ancestry paths
     return classTree.Root
@@ -870,7 +871,7 @@ func (repeatGenome *RepeatGenome) minimizeThread(minCache *MinCache, matchStart,
     k_ := uint64(k)
     m := repeatGenome.M
     //m_ := uint64(m)
-    var currOffset uint8
+    var currOffset, x uint8
     var seq, kmerSeq string
     var kmerInt, possMin, currMin, cachedMin uint64
     var exists bool
@@ -884,8 +885,16 @@ func (repeatGenome *RepeatGenome) minimizeThread(minCache *MinCache, matchStart,
             continue
         }
 
+        KmerLoop:
         for j := match.SeqStart; j <= match.SeqEnd - k_; j++ {
             kmerSeq = seq[j : j + k_]
+            // we begin by skipping any kmers containing n's
+            for x = 0; x < k; x++ {
+                if kmerSeq[x] == 'n' {
+                    j += uint64(x)
+                    continue KmerLoop
+                }
+            }
             kmerInt = seqToInt(kmerSeq)
             minCache.Lock()
             cachedMin, exists = minCache.Cache[kmerInt]
@@ -955,6 +964,11 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
     var relative *ClassNode
 
     for i = 0; i < numKmers; i++ {
+        /*
+        if i%5000000 == 0 {
+            fmt.Println(i / 1000000, "million kmers processed")
+        }
+        */
         if i%5000000 == 0 {
             fmt.Println(i / 1000000, "million kmers processed")
         }
