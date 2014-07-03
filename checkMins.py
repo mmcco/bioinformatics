@@ -27,7 +27,7 @@ if __name__ == "__main__":
                 fields = line.split()
                 if len(fields) != 2:
                     raise Exception("ERROR: malformed kmer line")
-                kmer = bytearray(fields[1].strip())
+                kmer = fields[0].strip()
                 pyMin = mini(kmer, m)
                 if pyMin != currMin:
                     print

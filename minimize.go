@@ -173,20 +173,20 @@ func seqToInt(seq string) uint64 {
     if len(seq) < 1 || len(seq) > 31 {
         panic("seqToInt() can only int-ize sequences where 0 < length < 32")
     }
-    var seqInt uint64
-    for i := range seq {
+    var seqInt uint64 = 0
+    for i := 0; i < len(seq); i++ {
         seqInt = seqInt << 2
         switch seq[i] {
         case 'a':
             break
         case 'c':
-            seqInt = seqInt | 1
+            seqInt |= 1
             break
         case 'g':
-            seqInt = seqInt | 2
+            seqInt |= 2
             break
         case 't':
-            seqInt = seqInt | 3
+            seqInt |= 3
             break
         default:
             panic("byte other than 'a', 'c', 'g', or 't' passed to seqToInt()")
@@ -199,18 +199,18 @@ func revCompToInt(seq string) uint64 {
     if len(seq) < 1 || len(seq) > 31 {
         panic("revCompToInt() can only int-ize sequences where 0 < length < 32")
     }
-    var seqInt uint64
+    var seqInt uint64 = 0
     for i := range seq {
         seqInt = seqInt << 2
         switch seq[len(seq) - (i + 1)] {
         case 'a':
-            seqInt = seqInt | 3
+            seqInt |= 3
             break
         case 'c':
-            seqInt = seqInt | 2
+            seqInt |= 2
             break
         case 'g':
-            seqInt = seqInt | 1
+            seqInt |= 1
             break
         case 't':
             break
@@ -219,6 +219,34 @@ func revCompToInt(seq string) uint64 {
         }
     }
     return seqInt
+}
+
+func intRevComp(posInt uint64, seqLen uint8) uint64 {
+    var revComp uint64 = 0
+    var i uint8
+    for i = 0; i < seqLen; i++ {
+        // should execute before every loop but the first
+        if i != 0 {
+            revComp <<= 2
+            posInt >>= 2
+        }
+        switch posInt & 3 {
+        case 0:
+            revComp |= 3
+            break
+        case 1:
+            revComp |= 2
+            break
+        case 2:
+            revComp |= 1
+            break
+        case 3:
+            break
+        default:
+            panic("bit manipulation logic error in intRevComp()")
+        }
+    }
+    return revComp
 }
 
 // returns the number of lines and a slice of the lines
