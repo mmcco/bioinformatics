@@ -31,7 +31,8 @@
 package main
 
 import (
-    //"bufio"
+    "io"
+    "bufio"
     "bytes"
     "flag"
     "fmt"
@@ -834,28 +835,97 @@ func boolToInt(a bool) int {
     }
 }
 
-/*
-// !!! using []bytes instead of strings would probably make this faster
-// additionally, using strconv and the writer's writing methods would probably be much faster
-// profiling will determine whether these optimizations are worthwhile
-func (minMap MinMap) Write(genomeName string) {
+// a saner way of doing this would be to allocate a single k-long []byte and have a function populate it before printing
+func (minMap MinMap) Write(genomeName string, k uint8) error {
     filename := strings.Join([]string{genomeName, ".mins"}, "")
     outfile, err := os.Create(filename)
-    checkError(err)
+    if err != nil {
+        return err
+    }
     defer outfile.Close()
     writer := bufio.NewWriter(outfile)
     defer writer.Flush()
 
     for thisMin, kmers := range minMap {
-        _, err = fmt.Fprintf(writer, ">%s\n", thisMin)
-        checkError(err)
+        _, err = fmt.Fprint(writer, ">")
+        if err != nil {
+            return err
+        }
+        err = writeSeqInt(writer, thisMin, k)
+        if err != nil {
+            return err
+        }
+        _, err = fmt.Fprint(writer, "\n")
+        if err != nil {
+            return err
+        }
         for i := range kmers {
-            _, err = fmt.Fprintf(writer, "\t%s %d %d %s\n", kmers[i].Seq, kmers[i].MinOffset, boolToInt(kmers[i].IsRevComp), kmers[i].LCA.Name)
-            checkError(err)
+            _, err = fmt.Fprint(writer, "\t\t")
+            if err != nil {
+                return err
+            }
+            err = writeSeqInt(writer, kmers[i].SeqInt, k)
+            if err != nil {
+                return err
+            }
+            _, err = fmt.Fprintf(writer, " %s\n", kmers[i].LCA.Name)
+            if err != nil {
+                return err
+            }
+        }
+    }
+    return nil
+}
+
+func printSeqInt(seqInt uint64, seqLen uint8) {
+    var i uint8
+    for i = 0; i < seqLen; i++ {
+        // this tricky bit arithmetic shifts the two bits of interests to the two rightmost positions, then selects them with the and statement
+        switch (seqInt >> (2 * (seqLen - i - 1))) & 3 {
+        case 0:
+            fmt.Print("a")
+            break
+        case 1:
+            fmt.Print("c")
+            break
+        case 2:
+            fmt.Print("g")
+            break
+        case 3:
+            fmt.Print("t")
+            break
+        default:
+            panic("error in printSeqInt() base selection")
         }
     }
 }
-*/
+
+func writeSeqInt(writer io.ByteWriter, seqInt uint64, seqLen uint8) error {
+    var i uint8
+    for i = 0; i < seqLen; i++ {
+        // this tricky bit arithmetic shifts the two bits of interests to the two rightmost positions, then selects them with the and statement
+        switch (seqInt >> (2 * (seqLen - i - 1))) & 3 {
+        case 0:
+            err = writer.WriteByte('a')
+            break
+        case 1:
+            err = writer.WriteByte('c')
+            break
+        case 2:
+            err = writer.WriteByte('g')
+            break
+        case 3:
+            err = writer.WriteByte('t')
+            break
+        default:
+            panic("error in printSeqInt() base selection")
+        }
+        if err != nil {
+            return err
+        }
+    }
+    return nil
+}
 
 // some of the logic in here is deeply nested or non-obvious for efficiency's sake
 // specifically, we made sure not to make any heap allocations, which means reverse complements can never be explicitly evaluated
@@ -1014,11 +1084,10 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
         }
     }
 
-    /*
     if writeMins {
-        minMap.Write(repeatGenome.Name)
+        err = minMap.Write(repeatGenome.Name, repeatGenome.K)
+        checkError(err)
     }
-    */
 
     if *MEMPROFILE {
         f, err := os.Create(repeatGenome.Name + ".memprof")
