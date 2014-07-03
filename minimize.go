@@ -13,6 +13,10 @@
 
    Premature commenting is the root of all evil, and I have sinned. Please read comments skeptically.
 
+   I should probably change some variable names, like repeatGenome, to less verbose variants, and use more aliases.
+
+   seqToInt and revCompToInt need minor cleanup and a potential name-change.
+
    Should reconsider what is a pointer and what is directly referenced
 
    All sequences containing Ns are currently ignored.
@@ -99,6 +103,7 @@ type RepeatGenome struct {
     M            uint8
     Kmers        []Kmer
     OffsetsToMin map[uint64]uint64
+    SortedMins   Uint64Slice
     Matches      Matches
     ClassTree    ClassTree
     Repeats      Repeats
@@ -150,7 +155,6 @@ type Matches    []Match
 
 type ThreadResponse struct {
     KmerInt      uint64
-    Minimizer uint64
     Relative  *ClassNode
 }
 
@@ -429,18 +433,23 @@ func (repeatGenome *RepeatGenome) getRepeats() {
 }
 
 func getMinimizer(kmer string, m uint8) (uint8, uint64) {
-    numPossMins := len(kmer) - (int(m) - 1)
+    var k uint8 = uint8(len(kmer))
+    numPossMins := k - (m - 1)
     if numPossMins < 1 || m < 1 {
         panic("getMinimizer(): m must be <= len(k) and > 0")
     }
 
-    var possMin uint64
     // stores the index of the leftmost base included in the minimizer
     var currOffset uint8 = 0
     currMin := seqToInt(kmer[:m])
+    possMin := currMin
     // i indexes the base to be added in a given iteration
-    for i := int(m); i < len(kmer); i++ {
-        possMin = currMin << 2
+    for i := m; i < k; i++ {
+        // overflow off the first base
+        possMin <<= 64 - 2 * (m - 1)
+        // return to proper alignment
+        possMin >>= 64 - 2 * m
+        // update new char
         switch kmer[i] {
         case 'a':
             break
@@ -463,14 +472,21 @@ func getMinimizer(kmer string, m uint8) (uint8, uint64) {
     }
 
     // now we test the reverse complements
-    possMin = revCompToInt(kmer[len(kmer) - int(m) : ])
+
+    possMin = revCompToInt(kmer[k - m : ])
     if possMin < currMin {
         currMin = possMin
+        currOffset = k - m
     }
     // we now work right-to-left
     // i indexes the char to be added in a given iteration
-    for i := len(kmer) - (int(m) + 1); i <= 0; i-- {
-        possMin = currMin << 2
+    // must use i of type int because uint8 causes overflow
+    for i := int(k) - (int(m) + 1); i >= 0; i-- {
+        // overflow off the first base
+        possMin <<= 64 - 2 * (m - 1)
+        // return to proper alignment
+        possMin >>= 64 - 2 * m
+        // update new char
         switch kmer[i] {
         case 'a':
             possMin |= 3
@@ -483,6 +499,8 @@ func getMinimizer(kmer string, m uint8) (uint8, uint64) {
             break
         case 't':
             break
+        default:
+            panic("getMinimizer(): kmer supplied containing byte other than 'a', 'c', 'g', or 't'")
         }
         if possMin < currMin {
             currMin = possMin
@@ -720,86 +738,6 @@ func (refGenome *RepeatGenome) PrintChromInfo() {
     }
 }
 
-// tests the reverse complement of seq against currMin (assumedly the current minimizer)
-// true is returned only if the rev. comp. is lexicographically less than currMin
-// this is used so that a new string doesn't have to be dynamically allocated for the rev. comp.
-func testRevComp(a, b string) bool {
-    var revCompChar byte
-    // !!! DO NOT use range notation here - doing so is inefficient, converting the string to a []rune
-    for i := 0; i < len(a); i++ {
-        switch a[len(a)-i-1] {
-        case byte('a'):
-            revCompChar = byte('t')
-            break
-        case byte('t'):
-            revCompChar = byte('a')
-            break
-        case byte('c'):
-            revCompChar = byte('g')
-            break
-        case byte('g'):
-            revCompChar = byte('c')
-            break
-        default:
-            log.Fatal("FATAL ERROR: byte other than 'a', 't', 'c', or 'g' passed to testRevComp()")
-        }
-        if revCompChar < b[i] {
-            return true
-        } else if revCompChar > b[i] {
-            return false
-        }
-    }
-    return false
-}
-
-// returns true only if the reverse complement of the first sequence is smaller than that of the second
-func testTwoRevComps(a, b string) bool {
-    var charA, charB byte
-    // !!! DO NOT use range notation here - doing so is inefficient, converting the string to a []rune
-    for i := len(a) - 1; i >= 0; i-- {
-        switch a[i] {
-        case byte('a'):
-            charA = byte('t')
-            break
-        case byte('t'):
-            charA = byte('a')
-            break
-        case byte('c'):
-            charA = byte('g')
-            break
-        case byte('g'):
-            charA = byte('c')
-            break
-        default:
-            log.Fatal("FATAL ERROR: byte other than 'a', 't', 'c', or 'g' passed to testTwoRevComps()")
-        }
-
-        switch b[i] {
-        case byte('a'):
-            charB = byte('t')
-            break
-        case byte('t'):
-            charB = byte('a')
-            break
-        case byte('c'):
-            charB = byte('g')
-            break
-        case byte('g'):
-            charB = byte('c')
-            break
-        default:
-            log.Fatal("FATAL ERROR: rune other than 'a', 't', 'c', or 'g' passed to testTwoRevComps()")
-        }
-
-        if charA < charB {
-            return true
-        } else if charA > charB {
-            return false
-        }
-    }
-    return false
-}
-
 // needed for sort.Interface
 func (kmers Kmers) Len() int {
     return len(kmers)
@@ -836,8 +774,10 @@ func boolToInt(a bool) int {
 }
 
 // a saner way of doing this would be to allocate a single k-long []byte and have a function populate it before printing
-func (minMap MinMap) Write(genomeName string, k uint8) error {
-    filename := strings.Join([]string{genomeName, ".mins"}, "")
+func (repeatGenome RepeatGenome) WriteMins() error {
+    k := repeatGenome.K
+    m := repeatGenome.M
+    filename := strings.Join([]string{repeatGenome.Name, ".mins"}, "")
     outfile, err := os.Create(filename)
     if err != nil {
         return err
@@ -846,32 +786,52 @@ func (minMap MinMap) Write(genomeName string, k uint8) error {
     writer := bufio.NewWriter(outfile)
     defer writer.Flush()
 
-    for thisMin, kmers := range minMap {
-        _, err = fmt.Fprint(writer, ">")
-        if err != nil {
-            return err
-        }
-        err = writeSeqInt(writer, thisMin, k)
-        if err != nil {
-            return err
-        }
-        _, err = fmt.Fprint(writer, "\n")
-        if err != nil {
-            return err
-        }
-        for i := range kmers {
-            _, err = fmt.Fprint(writer, "\t\t")
+    var kmer *Kmer
+    minIndex := 0
+    thisMin := repeatGenome.SortedMins[minIndex]
+    thisMinsBoundary := repeatGenome.OffsetsToMin[thisMin]
+    _, err = fmt.Fprint(writer, ">")
+    if err != nil {
+        return err
+    }
+    err = writeSeqInt(writer, thisMin, m)
+    if err != nil {
+        return err
+    }
+    _, err = fmt.Fprint(writer, "\n")
+    if err != nil {
+        return err
+    }
+    for i := range repeatGenome.Kmers {
+        if uint64(i) > thisMinsBoundary {
+            minIndex++
+            thisMin = repeatGenome.SortedMins[minIndex]
+            thisMinsBoundary = repeatGenome.OffsetsToMin[thisMin]
+            _, err = fmt.Fprint(writer, ">")
             if err != nil {
                 return err
             }
-            err = writeSeqInt(writer, kmers[i].SeqInt, k)
+            err = writeSeqInt(writer, thisMin, m)
             if err != nil {
                 return err
             }
-            _, err = fmt.Fprintf(writer, " %s\n", kmers[i].LCA.Name)
+            _, err = fmt.Fprint(writer, "\n")
             if err != nil {
                 return err
             }
+        }
+        kmer = &repeatGenome.Kmers[i]
+        _, err = fmt.Fprint(writer, "\t")
+        if err != nil {
+            return err
+        }
+        err = writeSeqInt(writer, kmer.SeqInt, k)
+        if err != nil {
+            return err
+        }
+        _, err = fmt.Fprintf(writer, " %s\n", kmer.LCA.Name)
+        if err != nil {
+            return err
         }
     }
     return nil
@@ -943,7 +903,7 @@ func (repeatGenome *RepeatGenome) minimizeThread(minCache *MinCache, matchStart,
     //m_ := uint64(m)
     var currOffset, x uint8
     var seq, kmerSeq string
-    var kmerInt, possMin, currMin, cachedMin uint64
+    var kmerInt, possMin, currMin uint64
     var exists bool
 
     for i := matchStart; i < matchEnd; i++ {
@@ -960,24 +920,24 @@ func (repeatGenome *RepeatGenome) minimizeThread(minCache *MinCache, matchStart,
             kmerSeq = seq[j : j + k_]
             // we begin by skipping any kmers containing n's
             for x = 0; x < k; x++ {
-                if kmerSeq[x] == 'n' {
+                if kmerSeq[x] == byte('n') {
                     j += uint64(x)
                     continue KmerLoop
                 }
             }
             kmerInt = seqToInt(kmerSeq)
             minCache.Lock()
-            cachedMin, exists = minCache.Cache[kmerInt]
+            _, exists = minCache.Cache[kmerInt]
             minCache.Unlock()
             if exists {
-                c <- ThreadResponse{kmerInt, cachedMin, match.ClassNode}
+                c <- ThreadResponse{kmerInt, match.ClassNode}
             } else if j == match.SeqStart || uint64(currOffset) < j {
                 currOffset, currMin = getMinimizer(kmerSeq, m)
                 minCache.Lock()
                 minCache.Cache[kmerInt] = currMin
                 minCache.Unlock()
 
-                c <- ThreadResponse{kmerInt, currMin, match.ClassNode}
+                c <- ThreadResponse{kmerInt, match.ClassNode}
             } else {
                 possMin = seqToInt(kmerSeq[k - m : ])
                 if possMin < currMin {
@@ -993,7 +953,7 @@ func (repeatGenome *RepeatGenome) minimizeThread(minCache *MinCache, matchStart,
                 minCache.Cache[kmerInt] = currMin
                 minCache.Unlock()
 
-                c <- ThreadResponse{kmerInt, currMin, match.ClassNode}
+                c <- ThreadResponse{kmerInt, match.ClassNode}
             }
         }
     }
@@ -1012,12 +972,13 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
     runtime.GOMAXPROCS(numCPU)
     c := make(chan ThreadResponse, 100000)
     var mStart, mEnd uint64
-    minMap := make(MinMap)
+    //minMap := make(MinMap)
+    kmerMap := make(map[uint64]*Kmer)
     minCache := new(MinCache)
     minCache.Cache = make(map[uint64]uint64)
 
     numKmers := repeatGenome.numKmers()
-    fmt.Println("\t\t", numKmers, "kmers")
+    fmt.Println("expecting", numKmers, "kmers")
 
     for i := 0; i < numCPU; i++ {
         mStart = uint64(i * len(repeatGenome.Matches) / numCPU)
@@ -1030,62 +991,62 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
     // it should therefore be optimized before other sections
     var kmer *Kmer
     var response ThreadResponse
-    var i, kmerInt, minimizer uint64
+    var i, kmerInt uint64
     var relative *ClassNode
+    var exists bool
 
     for i = 0; i < numKmers; i++ {
-        /*
-        if i%5000000 == 0 {
-            fmt.Println(i / 1000000, "million kmers processed")
-        }
-        */
         if i%5000000 == 0 {
             fmt.Println(i / 1000000, "million kmers processed")
         }
 
         response = <- c
-        kmerInt, minimizer, relative = response.KmerInt, response.Minimizer, response.Relative
+        kmerInt, relative = response.KmerInt, response.Relative
 
         if relative == nil {
             panic("nil relative returned by thread")
         }
 
-        kmer = nil
-        for j := range minMap[minimizer] {
-            if minMap[minimizer][j].SeqInt == kmerInt {
-                kmer = minMap[minimizer][j]
-                break
-            }
-        }
-        if kmer == nil {
-            minMap[minimizer] = append(minMap[minimizer], &Kmer{kmerInt, relative})
-        } else {
+        kmer, exists = kmerMap[kmerInt]
+        if exists {
             kmer.LCA = repeatGenome.ClassTree.getLCA(kmer.LCA, relative)
+        } else {
+            kmerMap[kmerInt] = &Kmer{kmerInt, relative}
         }
     }
 
     fmt.Println("all minimizers generated")
 
-    minimizers := Uint64Slice{}
-    for minimizer, kmers := range minMap {
-        minimizers = append(minimizers, minimizer)
-        sort.Sort(kmers)
+    var kmers Kmers
+    minMap := make(map[uint64]Kmers)
+    for kmerInt, minimizer := range minCache.Cache {
+        kmers, exists = minMap[minimizer]
+        if exists {
+            kmers = append(kmers, kmerMap[kmerInt])
+        } else {
+            minMap[minimizer] = Kmers{kmerMap[kmerInt]}
+        }
     }
 
-    sort.Sort(minimizers)
+    repeatGenome.SortedMins = make(Uint64Slice, 0, len(minMap))
+    for minimizer, _ := range minMap {
+        repeatGenome.SortedMins = append(repeatGenome.SortedMins, minimizer)
+    }
+    sort.Sort(repeatGenome.SortedMins)
 
     var currOffset uint64 = 0
     repeatGenome.OffsetsToMin = make(map[uint64]uint64)
-    for i := range minimizers {
-        repeatGenome.OffsetsToMin[minimizers[i]] = currOffset
-        currOffset += uint64(len(minMap[minimizers[i]]))
-        for j := range minMap[minimizers[i]] {
-            repeatGenome.Kmers = append(repeatGenome.Kmers, *minMap[minimizers[i]][j])
+    repeatGenome.Kmers = []Kmer{}
+    for i := range repeatGenome.SortedMins {
+        repeatGenome.OffsetsToMin[repeatGenome.SortedMins[i]] = currOffset
+        currOffset += uint64(len(minMap[repeatGenome.SortedMins[i]]))
+        for j := range minMap[repeatGenome.SortedMins[i]] {
+            repeatGenome.Kmers = append(repeatGenome.Kmers, *minMap[repeatGenome.SortedMins[i]][j])
         }
     }
 
     if writeMins {
-        err = minMap.Write(repeatGenome.Name, repeatGenome.K)
+        err = repeatGenome.WriteMins()
         checkError(err)
     }
 
@@ -1186,17 +1147,6 @@ func main() {
         fmt.Println()
         fmt.Println("number of ClassNodes:", len(repeatGenome.ClassTree.ClassNodes))
         fmt.Println()
-        fmt.Println("seqLessThan('aacct', 'aacct'):", seqLessThan("aacct", "aacct"))
-        fmt.Println("seqLessThan('aacca', 'aaccg'):", seqLessThan("aacca", "aaccg"))
-        fmt.Println("seqLessThan('aacct', 'aacca'):", seqLessThan("aacct", "aacca"))
-        fmt.Println()
-        fmt.Println("testRevComp('aacct', 'aacct'):", testRevComp("aacct", "aacct"))
-        fmt.Println("testRevComp('aacca', 'aaccg'):", testRevComp("aacca", "aaccg"))
-        fmt.Println("testRevComp('aacct', 'aacca'):", testRevComp("aacct", "aacca"))
-        fmt.Println()
-        fmt.Println("testTwoRevComps('aacct', 'aacct'):", testTwoRevComps("aacct", "aacct"))
-        fmt.Println("testTwoRevComps('aacca', 'aaccg'):", testTwoRevComps("aacca", "aaccg"))
-        fmt.Println("testTwoRevComps('aacct', 'aacca'):", testTwoRevComps("aacct", "aacca"))
 
         //fmt.Println("classTree.getLCA(classTree.ClassNodes['DNA/TcMar-Mariner'], classTree.ClassNodes['DNA/TcMar-Tc1']):", classTree.getLCA(classTree.ClassNodes["DNA/TcMar-Mariner"], classTree.ClassNodes["DNA/TcMar-Tc1"]))
 
@@ -1205,27 +1155,9 @@ func main() {
         fmt.Println("max64(int64(5), int64(7)):", max64(int64(5), int64(7)))
         fmt.Println()
 
-        minOffset, isRevComp := getMinimizer("tgctcctgtcatgcatacgcaggtcatgcat", 15)
-        fmt.Println("getMinimizer('tgctcctgtcatgcatacgcaggtcatgcat', 15):", minOffset, isRevComp)
-        //fmt.Println("testTwoRevComps('atttat', 'aattat'):", testTwoRevComps([]byte("atttat"), []byte("atttaa")))
-        //fmt.Println("testRevComp('atttat', 'atttaa'):", testRevComp([]byte("atttat"), []byte("atttaa")))
-
-        //fmt.Println("getMinimizer(\"ataggatcacgac\", 4) =", getMinimizer("ataggatcacgac", 4))
-        fmt.Println("revComp(\"aaAtGctACggT\") =", revComp("aaAtGctACggT"))
-
-        /*
+        offset, thisMin := getMinimizer("tgctcctgtcatgcatacgcaggtcatgcat", 15)
+        fmt.Println("getMinimizer('tgctcctgtcatgcatacgcaggtcatgcat', 15) offset :", offset)
+        printSeqInt(thisMin, 15)
         fmt.Println()
-        fmt.Println("expected number of kmers:", repeatGenome.numKmers(k))
-        var numKmers int32 = 0
-        for _, v := range minMap {
-            for i := range v {
-                for _, count := range v[i].Count {
-                    numKmers += count
-                }
-            }
-        }
-        fmt.Println("number of kmers minimized:", numKmers)
-        fmt.Println()
-        */
     }
 }
