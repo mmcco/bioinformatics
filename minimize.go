@@ -31,7 +31,7 @@
 package main
 
 import (
-    "bufio"
+    //"bufio"
     "bytes"
     "flag"
     "fmt"
@@ -97,7 +97,7 @@ type RepeatGenome struct {
     K            uint8
     M            uint8
     Kmers        []Kmer
-    OffsetsToMin map[string]uint64
+    OffsetsToMin map[uint64]uint64
     Matches      Matches
     ClassTree    ClassTree
     Repeats      Repeats
@@ -427,8 +427,8 @@ func (repeatGenome *RepeatGenome) getRepeats() {
     }
 }
 
-func getMinimizer(kmer string, m int) (uint8, uint64) {
-    numPossMins := len(kmer) - (m - 1)
+func getMinimizer(kmer string, m uint8) (uint8, uint64) {
+    numPossMins := len(kmer) - (int(m) - 1)
     if numPossMins < 1 || m < 1 {
         panic("getMinimizer(): m must be <= len(k) and > 0")
     }
@@ -436,9 +436,9 @@ func getMinimizer(kmer string, m int) (uint8, uint64) {
     var possMin uint64
     // stores the index of the leftmost base included in the minimizer
     var currOffset uint8 = 0
-    currMin = seqToInt(kmer[:m])
+    currMin := seqToInt(kmer[:m])
     // i indexes the base to be added in a given iteration
-    for i := m; i < len(kmer); i++ {
+    for i := int(m); i < len(kmer); i++ {
         possMin = currMin << 2
         switch kmer[i] {
         case 'a':
@@ -457,18 +457,18 @@ func getMinimizer(kmer string, m int) (uint8, uint64) {
         }
         if possMin < currMin {
             currMin = possMin
-            currOffset = i - (m - 1)
+            currOffset = uint8(i) - (m - 1)
         }
     }
 
     // now we test the reverse complements
-    possMin = revCompToInt(kmer[len(kmer) - m : ])
+    possMin = revCompToInt(kmer[len(kmer) - int(m) : ])
     if possMin < currMin {
         currMin = possMin
     }
     // we now work right-to-left
     // i indexes the char to be added in a given iteration
-    for i := len(kmer) - (m + 1); i <= 0; i-- {
+    for i := len(kmer) - (int(m) + 1); i <= 0; i-- {
         possMin = currMin << 2
         switch kmer[i] {
         case 'a':
@@ -485,7 +485,7 @@ func getMinimizer(kmer string, m int) (uint8, uint64) {
         }
         if possMin < currMin {
             currMin = possMin
-            currOffset = i
+            currOffset = uint8(i)
         }
     }
     return currOffset, currMin
@@ -718,18 +718,6 @@ func (refGenome *RepeatGenome) PrintChromInfo() {
     }
 }
 
-// returns a pointer to the supplied kmer with the supplied minimizer in the supplied map
-// if it does not exist, nil is returned
-func (minMap MinMap) getKmer(minimizer string, kmerSeq string) *Kmer {
-    for i := range minMap[minimizer] {
-        if minMap[minimizer][i].Seq == kmerSeq {
-            return minMap[minimizer][i]
-        }
-    }
-    fmt.Println(minMap[minimizer])
-    return nil
-}
-
 // tests the reverse complement of seq against currMin (assumedly the current minimizer)
 // true is returned only if the rev. comp. is lexicographically less than currMin
 // this is used so that a new string doesn't have to be dynamically allocated for the rev. comp.
@@ -820,9 +808,23 @@ func (kmers Kmers) Swap(i, j int) {
 }
 
 func (kmers Kmers) Less(i, j int) bool {
-    return seqLessThan(kmers[i].Seq, kmers[j].Seq)
+    return kmers[i].SeqInt < kmers[j].SeqInt
 }
 
+// needed for sort.Interface
+type Uint64Slice []uint64
+
+func (uint64s Uint64Slice) Len() int {
+    return len(uint64s)
+}
+
+func (uint64s Uint64Slice) Swap(i, j int) {
+    uint64s[i], uint64s[j] = uint64s[j], uint64s[i]
+}
+
+func (uint64s Uint64Slice) Less(i, j int) bool {
+    return uint64s[i] < uint64s[j]
+}
 func boolToInt(a bool) int {
     if a {
         return 1
@@ -831,6 +833,7 @@ func boolToInt(a bool) int {
     }
 }
 
+/*
 // !!! using []bytes instead of strings would probably make this faster
 // additionally, using strconv and the writer's writing methods would probably be much faster
 // profiling will determine whether these optimizations are worthwhile
@@ -848,15 +851,10 @@ func (minMap MinMap) Write(genomeName string) {
         for i := range kmers {
             _, err = fmt.Fprintf(writer, "\t%s %d %d %s\n", kmers[i].Seq, kmers[i].MinOffset, boolToInt(kmers[i].IsRevComp), kmers[i].LCA.Name)
             checkError(err)
-            /*
-            for j := range kmers[i].InstanceCounter {
-                _, err = fmt.Fprintf(writer, "\t\t%d %d\n", kmers[i].InstanceCounter[j].Repeat.ID, kmers[i].InstanceCounter[j].Count)
-                checkError(err)
-            }
-            */
         }
     }
 }
+*/
 
 // some of the logic in here is deeply nested or non-obvious for efficiency's sake
 // specifically, we made sure not to make any heap allocations, which means reverse complements can never be explicitly evaluated
@@ -867,50 +865,53 @@ func (repeatGenome *RepeatGenome) minimizeThread(minCache *MinCache, matchStart,
     }
 
     var match *Match
-    var seqLen int64
+    var seqLen uint64
     k := repeatGenome.K
+    k_ := uint64(k)
     m := repeatGenome.M
+    //m_ := uint64(m)
     var currOffset uint8
     var seq, kmerSeq string
-    var possMin, currMin uint64
+    var kmerInt, possMin, currMin, cachedMin uint64
+    var exists bool
 
     for i := matchStart; i < matchEnd; i++ {
-        seq = repeatGenome.Chroms[match.SeqName][match.SeqName]
         match = &repeatGenome.Matches[i]
+        seq = repeatGenome.Chroms[match.SeqName][match.SeqName]
         seqLen = match.SeqEnd - match.SeqStart
         // for now, we will ignore matches too short to be traditionally minimized
-        if seqLen < k {
+        if seqLen < k_ {
             continue
         }
 
-        for j := match.seqStart; j <= match.SeqEnd - k; j++ {
-            kmerSeq = seq[j : j + k])
-            kmerInt = seqToInt(kmer)
-            cachedMin, exists = minCache[kmerInt]
+        for j := match.SeqStart; j <= match.SeqEnd - k_; j++ {
+            kmerSeq = seq[j : j + k_]
+            kmerInt = seqToInt(kmerSeq)
+            minCache.Lock()
+            cachedMin, exists = minCache.Cache[kmerInt]
+            minCache.Unlock()
             if exists {
                 c <- ThreadResponse{kmerInt, cachedMin, match.ClassNode}
-            }
-            else if { j == match.seqStart || currOffset < j {
-                currOffset, currMin = getMinimizer(kmer)
+            } else if j == match.SeqStart || uint64(currOffset) < j {
+                currOffset, currMin = getMinimizer(kmerSeq, m)
                 minCache.Lock()
-                minCache[kmerInt] = currMin
+                minCache.Cache[kmerInt] = currMin
                 minCache.Unlock()
 
                 c <- ThreadResponse{kmerInt, currMin, match.ClassNode}
-            }
-            else {
-                possMin = seqToInt(kmer[k - m : ])
+            } else {
+                possMin = seqToInt(kmerSeq[k - m : ])
                 if possMin < currMin {
                     currMin = possMin
                     currOffset = k - m
                 }
-                possMin = revCompToInt(kmer[k - m : ])
+                possMin = revCompToInt(kmerSeq[k - m : ])
                 if possMin < currMin {
                     currMin = possMin
                     currOffset = k - m
                 }
                 minCache.Lock()
-                minCache[kmerInt] = currMin
+                minCache.Cache[kmerInt] = currMin
                 minCache.Unlock()
 
                 c <- ThreadResponse{kmerInt, currMin, match.ClassNode}
@@ -930,10 +931,8 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
         fmt.Printf("using %d CPUs\n", numCPU)
     }
     runtime.GOMAXPROCS(numCPU)
-    repeatGenome.MinCache.MinCacheMap = make(map[string]string)
     c := make(chan ThreadResponse, 100000)
     var mStart, mEnd uint64
-    var relative *Repeat
     minMap := make(MinMap)
     minCache := new(MinCache)
     minCache.Cache = make(map[uint64]uint64)
@@ -952,7 +951,8 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
     // it should therefore be optimized before other sections
     var kmer *Kmer
     var response ThreadResponse
-    var i uint64
+    var i, kmerInt, minimizer uint64
+    var relative *ClassNode
 
     for i = 0; i < numKmers; i++ {
         if i%5000000 == 0 {
@@ -960,21 +960,21 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
         }
 
         response = <- c
-        kmerInt, minimizer, relative = threadResponse.KmerInt, threadResponse.Minimizer, threadResponse.Relative
+        kmerInt, minimizer, relative = response.KmerInt, response.Minimizer, response.Relative
 
         if relative == nil {
             panic("nil relative returned by thread")
         }
 
         kmer = nil
-        for j := range minMap[min] {
-            if minMap[minimizer][j].KmerInt == kmerInt {
+        for j := range minMap[minimizer] {
+            if minMap[minimizer][j].SeqInt == kmerInt {
                 kmer = minMap[minimizer][j]
                 break
             }
         }
         if kmer == nil {
-            minMap[minimizer] = append(minMap[minimizer], Kmer{kmerInt, relative})
+            minMap[minimizer] = append(minMap[minimizer], &Kmer{kmerInt, relative})
         } else {
             kmer.LCA = repeatGenome.ClassTree.getLCA(kmer.LCA, relative)
         }
@@ -982,34 +982,16 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
 
     fmt.Println("all minimizers generated")
 
-    if *DEBUG {
-        for k, v := range repeatGenome.ClassTree.ClassNodes {
-            if v == nil {
-                fmt.Println(v)
-                log.Fatal("nil ClassNode", k)
-            }
-        }
-        
-        for _, v := range minMap {
-            for i := range v {
-                if v[i].LCA == nil {
-                    fmt.Println(v[i])
-                    log.Fatal("nil LCA in kmer", v[i].Seq)
-                }
-            }
-        }
-    }
-
-    minimizers := []string{}
+    minimizers := Uint64Slice{}
     for minimizer, kmers := range minMap {
         minimizers = append(minimizers, minimizer)
         sort.Sort(kmers)
     }
 
-    sort.Strings(minimizers)
+    sort.Sort(minimizers)
 
     var currOffset uint64 = 0
-    repeatGenome.OffsetsToMin = make(map[string]uint64)
+    repeatGenome.OffsetsToMin = make(map[uint64]uint64)
     for i := range minimizers {
         repeatGenome.OffsetsToMin[minimizers[i]] = currOffset
         currOffset += uint64(len(minMap[minimizers[i]]))
@@ -1018,9 +1000,11 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
         }
     }
 
+    /*
     if writeMins {
         minMap.Write(repeatGenome.Name)
     }
+    */
 
     if *MEMPROFILE {
         f, err := os.Create(repeatGenome.Name + ".memprof")
