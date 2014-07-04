@@ -15,6 +15,8 @@
 
    I should probably change some variable names, like repeatGenome, to less verbose variants, and use more aliases.
 
+   Slice sizes should be specified in the make() call when the size is known.
+
    seqToInt and revCompToInt need minor cleanup and a potential name-change.
 
    Should reconsider what is a pointer and what is directly referenced
@@ -555,9 +557,8 @@ func revComp(seq string) string {
         case 'g':
             revCompSeq = append(revCompSeq, 'c')
             break
-        case 'n':
-            revCompSeq = append(revCompSeq, 'n')
-            break
+        default:
+            panic("byte other than 'a', 'c', 'g', or 't' supplied to revComp")
         }
     }
     return string(revCompSeq)
@@ -1006,7 +1007,7 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
     minCache.Cache = make(map[uint64]uint64)
 
     numKmers := repeatGenome.numKmers()
-    fmt.Println("expecting", numKmers, "kmers")
+    fmt.Println("expecting", numKmers / 1000000, "million kmers")
 
     for i := 0; i < numCPU; i++ {
         mStart = uint64(i * len(repeatGenome.Matches) / numCPU)
@@ -1044,6 +1045,10 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
     }
 
     fmt.Println("all minimizers generated")
+    if len(kmerMap) != len(minCache.Cache) {
+        panic("RepeatGenome.GetKrakenSlice(): lengths of kmerMap and minCache.Cache are inconsistent")
+    }
+    fmt.Println(len(kmerMap), "unique kmers generated")
 
     var kmers Kmers
     minMap := make(map[uint64]Kmers)
