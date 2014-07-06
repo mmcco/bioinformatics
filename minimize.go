@@ -13,6 +13,10 @@
 
    Premature commenting is the root of all evil, and I have sinned. Please read comments skeptically.
 
+   Heap-allocated values and map indices should probably be manually deleted in GetKrakenSlice to help the GC.
+
+   To work around the missing repeat ID RepeatMasker bug, we should probably do a lookup on the repeat ID in a map before failing.
+
    I should probably change some variable names, like repeatGenome, to less verbose variants, and use more aliases.
 
    Slice sizes should be specified in the make() call when the size is known.
@@ -1076,6 +1080,7 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
         for j := range minMap[repeatGenome.SortedMins[i]] {
             repeatGenome.Kmers = append(repeatGenome.Kmers, *minMap[repeatGenome.SortedMins[i]][j])
         }
+        delete(minMap, repeatGenome.SortedMins[i])
     }
 
     if writeMins {
