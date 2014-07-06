@@ -466,81 +466,40 @@ func (repeatGenome *RepeatGenome) getRepeats() {
     }
 }
 
-func getMinimizer(kmer string, m uint8) (uint8, uint64) {
-    var k uint8 = uint8(len(kmer))
-    numPossMins := k - (m - 1)
-    if numPossMins < 1 || m < 1 {
-        panic("getMinimizer(): m must be <= len(k) and > 0")
+func getMinimizer(kmer uint64, k, m uint8) (uint8, uint64) {
+    if m > k || m < 1 {
+        panic("getMinimizer(): m must be <= k and > 0")
     }
 
     // stores the index of the leftmost base included in the minimizer
     var currOffset uint8 = 0
-    currMin := seqToInt(kmer[:m])
+    numExtraBases := 32 - k
+    revCompKmer := intRevComp(kmer, k)
+    currMin := kmer >> uint64(64 - 2 * (32 - k + m))
     possMin := currMin
-    // i indexes the base to be added in a given iteration
-    for i := m; i < k; i++ {
-        // overflow off the first base
-        possMin <<= 64 - 2 * (m - 1)
+    numHangingBases := k - m
+    var i uint8
+    // i is the index of the offset
+    for i = 0; i <= numHangingBases; i++ {
+        // overflow off the first excluded base
+        possMin = kmer << (2 * (numExtraBases + i))
         // return to proper alignment
         possMin >>= 64 - 2 * m
-        // update new char
-        switch kmer[i] {
-        case 'a':
-            break
-        case 'c':
-            possMin |= 1
-            break
-        case 'g':
-            possMin |= 2
-            break
-        case 't':
-            possMin |= 3
-            break
-        default:
-            panic("getMinimizer(): kmer supplied containing byte other than 'a', 'c', 'g', or 't'")
-        }
+        
         if possMin < currMin {
             currMin = possMin
-            currOffset = uint8(i) - (m - 1)
+            currOffset = i
+        }
+
+        possMin = revCompKmer << (2 * (numExtraBases + i))
+        possMin >>= 64 - 2 * m
+        
+        if possMin < currMin {
+            currMin = possMin
+            currOffset = numHangingBases - i
         }
     }
 
-    // now we test the reverse complements
-
-    possMin = revCompToInt(kmer[k - m : ])
-    if possMin < currMin {
-        currMin = possMin
-        currOffset = k - m
-    }
-    // we now work right-to-left
-    // i indexes the char to be added in a given iteration
-    // must use i of type int because uint8 causes overflow
-    for i := int(k) - (int(m) + 1); i >= 0; i-- {
-        // overflow off the first base
-        possMin <<= 64 - 2 * (m - 1)
-        // return to proper alignment
-        possMin >>= 64 - 2 * m
-        // update new char
-        switch kmer[i] {
-        case 'a':
-            possMin |= 3
-            break
-        case 'c':
-            possMin |= 2
-            break
-        case 'g':
-            possMin |= 1
-            break
-        case 't':
-            break
-        default:
-            panic("getMinimizer(): kmer supplied containing byte other than 'a', 'c', 'g', or 't'")
-        }
-        if possMin < currMin {
-            currMin = possMin
-            currOffset = uint8(i)
-        }
-    }
     return currOffset, currMin
 }
 
@@ -965,7 +924,7 @@ func (repeatGenome *RepeatGenome) minimizeThread(minCache *MinCache, matchStart,
             if exists {
                 c <- ThreadResponse{kmerInt, match.ClassNode}
             } else if j == match.SeqStart || uint64(currOffset) < j {
-                currOffset, currMin = getMinimizer(kmerSeq, m)
+                currOffset, currMin = getMinimizer(kmerInt, k, m)
                 minCache.Lock()
                 minCache.Cache[kmerInt] = currMin
                 minCache.Unlock()
@@ -992,7 +951,7 @@ func (repeatGenome *RepeatGenome) minimizeThread(minCache *MinCache, matchStart,
     }
 
     if *DEBUG {
-        fmt.Println("Thread life:", time.Since(startTime))
+        fmt.Println("\t\tThread life:", time.Since(startTime))
     }
 }
 
@@ -1193,7 +1152,8 @@ func main() {
         fmt.Println("max64(int64(5), int64(7)):", max64(int64(5), int64(7)))
         fmt.Println()
 
-        offset, thisMin := getMinimizer("tgctcctgtcatgcatacgcaggtcatgcat", 15)
+        testSeq := "tgctcctgtcatgcatacgcaggtcatgcat"
+        offset, thisMin := getMinimizer(seqToInt(testSeq), uint8(len(testSeq)), 15)
         fmt.Println("getMinimizer('tgctcctgtcatgcatacgcaggtcatgcat', 15) offset :", offset)
         printSeqInt(thisMin, 15)
         fmt.Println()
