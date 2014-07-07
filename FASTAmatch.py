@@ -11,6 +11,8 @@ import itertools
 import sys
 import os
 
+from testfuncs import *
+
 
 class Match:
 
@@ -116,7 +118,7 @@ class Genome:
         print len(self.matches), "matches to process"
         for match in self.matches:
             seq = str(self.chroms[match.chromName].seqs[match.chromName][match.chromStart : match.chromEnd]).lower()
-            kmerGen = (seq[i:i+k] for i in xrange(len(seq) - k + 1))
+            kmerGen = (min(seq[i:i+k], str(revComp(seq[i:i+k]))) for i in xrange(len(seq) - k + 1))
             for kmer in kmerGen:
                 if 'n' not in kmer:
                     self.kmers.add(kmer)
