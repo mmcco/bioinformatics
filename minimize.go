@@ -15,6 +15,8 @@
 
    Heap-allocated values and map indices should probably be manually deleted in GetKrakenSlice to help the GC.
 
+   We should test a version that doesn't cache minimizers, as that seems to be a needless bottleneck. It could also be conditional on the number of CPUs available.
+
    Minimizers are currently not written in any order. This is for memory efficiency, and can be changed in the future.
 
    To work around the missing repeat ID RepeatMasker bug, we should probably do a lookup on the repeat ID in a map before failing.
@@ -43,11 +45,12 @@
 package main
 
 import (
-    "io"
     "bufio"
     "bytes"
+    "encoding/json"
     "flag"
     "fmt"
+    "io"
     "io/ioutil"
     "log"
     "os"
@@ -66,6 +69,7 @@ var err error
 var DEBUG      *bool
 var CPUPROFILE *bool
 var MEMPROFILE *bool
+var MIN        bool
 
 // Match.SW_Score - Smith-Waterman score, describing the likeness to the repeat reference sequence
 // Match.PercDiv
@@ -441,8 +445,10 @@ func GenerateRepeatGenome(genomeName string, k, m uint8) *RepeatGenome {
     repeatGenome.K = k
     repeatGenome.M = m
 
-    // calling the parallel minimizer and writing the result
-    repeatGenome.GetKrakenSlice(true)
+    if MIN {
+        // calling the parallel minimizer and writing the result
+        repeatGenome.GetKrakenSlice(true)
+    }
 
     return repeatGenome
 }
@@ -613,13 +619,71 @@ func (classNode *ClassNode) printTreeRec(indent int, printLeaves bool) {
     }
 }
 
-func classSliceContains(a_s []*ClassNode, b *ClassNode) bool {
-    for i := range a_s {
-        if a_s[i] == b {
-            return true
+// used only for recursive JSON printing
+type JSONNode struct {
+    Name string          `json:"name"`
+    Size uint64          `json:"size"`
+    Children []*JSONNode `json:"children"`
+}
+
+func (repeatGenome *RepeatGenome) WriteClassJSON(useCumSize, printLeaves bool) {
+    tree := &repeatGenome.ClassTree
+
+    filename := repeatGenome.Name + ".classtree.json"
+    outfile, err := os.Create(filename)
+    checkError(err)
+    defer outfile.Close()
+
+    classToCount := make(map[uint16]uint64)
+    for i := range repeatGenome.Kmers {
+        lca_ID := *(*uint16)(unsafe.Pointer(&repeatGenome.Kmers[i].vals[8]))
+        classToCount[lca_ID]++
+    }
+
+    root := JSONNode{tree.Root.Name, classToCount[0], nil}
+    tree.jsonRecPopulate(&root, classToCount)
+
+    if useCumSize {
+        root.jsonRecSize()
+    }
+
+    if !printLeaves {
+        root.deleteLeaves()
+    }
+
+    jsonBytes, err := json.MarshalIndent(root, "", "\t")
+    checkError(err)
+    fmt.Fprint(outfile, string(jsonBytes))
+}
+
+func (classTree *ClassTree) jsonRecPopulate(jsonNode *JSONNode, classToCount map[uint16]uint64) {
+    classNode := classTree.ClassNodes[jsonNode.Name]
+    for i := range classNode.Children {
+        child := new(JSONNode)
+        child.Name = classNode.Children[i].Name
+        child.Size = classToCount[classTree.ClassNodes[child.Name].ID]
+        jsonNode.Children = append(jsonNode.Children, child)
+        classTree.jsonRecPopulate(child, classToCount)
+    }
+}
+
+func (jsonNode *JSONNode) jsonRecSize() uint64 {
+    for i := range jsonNode.Children {
+        jsonNode.Size += jsonNode.Children[i].jsonRecSize()
+    }
+    return jsonNode.Size
+}
+
+func (jsonNode *JSONNode) deleteLeaves() {
+    branchChildren := []*JSONNode{}
+    for i := range jsonNode.Children {
+        child := jsonNode.Children[i]
+        if child.Children != nil && len(child.Children) > 0 {
+            branchChildren = append(branchChildren, child)
+            child.deleteLeaves()
         }
     }
-    return false
+    jsonNode.Children = branchChildren
 }
 
 func (repeatGenome *RepeatGenome) getClassTree() {
@@ -790,7 +854,7 @@ func boolToInt(a bool) int {
 }
 
 // a saner way of doing this would be to allocate a single k-long []byte and have a function populate it before printing
-func (repeatGenome RepeatGenome) WriteMins(minMap map[uint64]Kmers) error {
+func (repeatGenome *RepeatGenome) WriteMins(minMap map[uint64]Kmers) error {
     k := repeatGenome.K
     m := repeatGenome.M
     kmerBuf := make([]byte, k, k)
@@ -1129,6 +1193,7 @@ func main() {
     CPUPROFILE = flag.Bool("cpuprof", false, "write cpu profile to file <genomeName>.cpuprof")
     MEMPROFILE = flag.Bool("memprof", false, "write memory profile to <genomeName>.memprof")
     DEBUG = flag.Bool("debug", false, "run and print debugging tests")
+    NOMIN := flag.Bool("nomin", false, "don't generate Kraken data structure")
     k_arg := flag.Uint("k", 31, "kmer length")
     m_arg := flag.Uint("m", 15, "minimizer length")
     flag.Parse()
@@ -1139,20 +1204,22 @@ func main() {
         checkError(err)
         pprof.StartCPUProfile(f)
         defer pprof.StopCPUProfile()
-    } else {
-        fmt.Println("CPU profiler disabled")
     }
 
     if *MEMPROFILE {
         fmt.Println("memory profiler enabled")
-    } else {
-        fmt.Println("memory profiler disabled")
     }
 
     if *DEBUG {
         fmt.Println("debug tests enabled")
+    }
+
+    // flip MIN
+    if *NOMIN {
+        MIN = false
+        fmt.Println("Kraken data structure disabled")
     } else {
-        fmt.Println("debug tests disabled")
+        MIN = true
     }
 
     var k, m uint8
@@ -1166,6 +1233,7 @@ func main() {
     }
 
     repeatGenome := GenerateRepeatGenome(genomeName, k, m)
+    repeatGenome.WriteClassJSON(false, false)
 
     if *DEBUG {
 
