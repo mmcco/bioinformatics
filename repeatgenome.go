@@ -42,7 +42,7 @@
    The sole command line argument is the name of the reference genome (e.g. "dm3").
 */
 
-package main
+package minimize
 
 import (
     "bufio"
@@ -70,6 +70,7 @@ var DEBUG      *bool
 var CPUPROFILE *bool
 var MEMPROFILE *bool
 var MIN        bool
+var JSON       *bool
 
 // Match.SW_Score - Smith-Waterman score, describing the likeness to the repeat reference sequence
 // Match.PercDiv
@@ -433,7 +434,7 @@ func parseGenome(genomeName string) map[string](map[string]string) {
     return chroms
 }
 
-func GenerateRepeatGenome(genomeName string, k, m uint8) *RepeatGenome {
+func Generate(genomeName string, k, m uint8) *RepeatGenome {
     // we popoulate the RepeatGenome mostly with helper functions
     // we should consider whether it makes more sense for them to alter the object directly, than to return their results
     repeatGenome := new(RepeatGenome)
@@ -448,6 +449,10 @@ func GenerateRepeatGenome(genomeName string, k, m uint8) *RepeatGenome {
     if MIN {
         // calling the parallel minimizer and writing the result
         repeatGenome.GetKrakenSlice(true)
+    }
+
+    if *JSON {
+        repeatGenome.WriteClassJSON(false, false)
     }
 
     return repeatGenome
@@ -1194,6 +1199,7 @@ func main() {
     MEMPROFILE = flag.Bool("memprof", false, "write memory profile to <genomeName>.memprof")
     DEBUG = flag.Bool("debug", false, "run and print debugging tests")
     NOMIN := flag.Bool("nomin", false, "don't generate Kraken data structure")
+    JSON = flag.Bool("json", false, "write JSON representation of class tree to <genomeName>.classtree.json")
     k_arg := flag.Uint("k", 31, "kmer length")
     m_arg := flag.Uint("m", 15, "minimizer length")
     flag.Parse()
@@ -1222,6 +1228,13 @@ func main() {
         MIN = true
     }
 
+    if *JSON && MIN {
+        fmt.Println("class tree JSON write enabled")
+    } else if *JSON && !MIN {
+        fmt.Println("class tree JSON write enabled")
+        fmt.Println("WARNING: you are writing the class tree JSON without minimizing - all node sizes will be 0")
+    }
+
     var k, m uint8
     if *k_arg > 255 || *m_arg > 255 {
         log.Fatal("k and m must be >= 255")
@@ -1232,8 +1245,7 @@ func main() {
         fmt.Println("m =", m)
     }
 
-    repeatGenome := GenerateRepeatGenome(genomeName, k, m)
-    repeatGenome.WriteClassJSON(false, false)
+    repeatGenome := Generate(genomeName, k, m)
 
     if *DEBUG {
 

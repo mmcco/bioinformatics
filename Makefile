@@ -1,2 +1,2 @@
-main: minimize.go
-	go build minimize.go
+main: repeatgenome.go
+	go build repeatgenome.go
