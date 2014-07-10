@@ -135,10 +135,16 @@ type ClassTree struct {
     Root *ClassNode
 }
 
-type Kmer struct {
-    // first eight bits are the int representation of the sequence
-    // the last two are the LCA ID
-    vals [10]byte
+// can store a kmer where k <= 32
+// the value of k is not stored in the struct, but rather in the RepeatGenome, for memory efficiency
+// first eight bits are the int representation of the sequence
+// the last two are the LCA ID
+type Kmer [10]byte
+
+// can store a sequence of length <= 65,535
+type Seq struct {
+    Bases  []byte
+    Length uint16
 }
 
 type Repeat struct {
@@ -263,9 +269,8 @@ func intRevComp(posInt uint64, seqLen uint8) uint64 {
 func parseMatches(genomeName string) Matches {
     // "my_genome_name"  ->  "my_genome_name/my_genome_name.fa.out"
     filepath := strings.Join([]string{genomeName, "/", genomeName, ".fa.out"}, "")
-    rawMatchesBytes, err := ioutil.ReadFile(filepath)
+    err, matchLines := fileLines(filepath)
     checkError(err)
-    _, matchLines := lines(rawMatchesBytes)
     // drop header
     matchLines = matchLines[3:]
 
@@ -377,13 +382,13 @@ func parseGenome(genomeName string) map[string](map[string]string) {
         chromFilepath := strings.Join([]string{genomeName, chromFilename}, "/")
         // process the ref genome files (*.fa), not the repeat ref files (*.fa.out and *.fa.align) or anything else
         if strings.HasSuffix(chromFilepath, ".fa") {
-            rawSeqBytes, err := ioutil.ReadFile(chromFilepath)
+            err, seqLines := fileLines(chromFilepath)
             checkError(err)
-            numLines, seqLines := lines(rawSeqBytes)
 
             // maps each sequence name in this chrom to a slice of its sequence's lines
             // the list is concatenated at the end for efficiency's sake
             seqMap := make(map[string][][]byte)
+            var numLines uint64 = uint64(len(seqLines))
             var seqName string
             var i uint64
             for i = 0; i < numLines; i++ {
@@ -607,7 +612,7 @@ func (repeatGenome *RepeatGenome) WriteClassJSON(useCumSize, printLeaves bool) {
 
     classToCount := make(map[uint16]uint64)
     for i := range repeatGenome.Kmers {
-        lca_ID := *(*uint16)(unsafe.Pointer(&repeatGenome.Kmers[i].vals[8]))
+        lca_ID := *(*uint16)(unsafe.Pointer(&repeatGenome.Kmers[i][8]))
         classToCount[lca_ID]++
     }
 
@@ -816,8 +821,8 @@ func (repeatGenome *RepeatGenome) WriteMins(minMap map[uint64]Kmers) error {
         }
 
         for i := range kmers {
-            kmerSeqInt = *(*uint64)(unsafe.Pointer(&kmers[i].vals[0]))
-            lca_ID = *(*uint16)(unsafe.Pointer(&kmers[i].vals[8]))
+            kmerSeqInt = *(*uint64)(unsafe.Pointer(&kmers[i][0]))
+            lca_ID = *(*uint16)(unsafe.Pointer(&kmers[i][8]))
             fillSeq(kmerBuf, kmerSeqInt)
             _, err = fmt.Fprintf(writer, "\t%s %s\n", kmerBuf, repeatGenome.ClassTree.NodesByID[lca_ID].Name)
             if err != nil {
@@ -1027,14 +1032,14 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
 
         kmer, exists = kmerMap[kmerInt]
         if exists {
-            lca_ID = *(*uint16)(unsafe.Pointer(&kmer.vals[8]))
+            lca_ID = *(*uint16)(unsafe.Pointer(&kmer[8]))
             lca = repeatGenome.ClassTree.getLCA(repeatGenome.ClassTree.NodesByID[lca_ID], relative)
-            *(*uint16)(unsafe.Pointer(&kmer.vals[8])) = lca.ID
+            *(*uint16)(unsafe.Pointer(&kmer[8])) = lca.ID
         } else {
-            var vals [10]byte
-            *(*uint64)(unsafe.Pointer(&vals[0])) = kmerInt
-            *(*uint16)(unsafe.Pointer(&vals[8])) = relative.ID
-            kmerMap[kmerInt] = &Kmer{vals}
+            kmer := Kmer{}
+            *(*uint64)(unsafe.Pointer(&kmer[0])) = kmerInt
+            *(*uint16)(unsafe.Pointer(&kmer[8])) = relative.ID
+            kmerMap[kmerInt] = &kmer
         }
     }
 

@@ -44,32 +44,31 @@ func merge(cs [](chan int)) <-chan int {
     return out
 }
 
-func fileLines(filepath string) (err error, numLines uint64, byteLines [][]byte) {
-    rawBytes, err := ioutil.ReadFile(filepath)
-    if err != nil {
-        return err, 0, nil
-    } else {
-        numLines, byteLines = lines(rawBytes)
-        return nil, numLines, byteLines
-    }
-}
-
 // returns the number of lines and a slice of the lines
-func lines(byteSlice []byte) (numLines uint64, lines [][]byte) {
-    numLines = 0
-    for i := range byteSlice {
-        if byteSlice[i] == '\n' {
-            numLines++
-        }
-    }
-    lines = bytes.Split(byteSlice, []byte{'\n'})
+func lines(byteSlice []byte) [][]byte {
+    var lines [][]byte = bytes.Split(byteSlice, []byte{'\n'})
     // drop the trailing newlines
     newline := []byte("\n")
     for lastLine := lines[len(lines)-1]; len(lines) > 0 && (len(lastLine) == 0 || bytes.Equal(lastLine, newline)); lastLine = lines[len(lines)-1] {
         lines = lines[:len(lines)-1]
     }
-    return numLines, lines
+    return lines
 }
+
+func fileLines(filepath string) (err error, linesBytes [][]byte) {
+    rawBytes, err := ioutil.ReadFile(filepath)
+    if err != nil {
+        return err, nil
+    } else {
+        return nil, lines(rawBytes)
+    }
+}
+
+/*
+func readSimSeqReads(filepath string) (err error, numReads uint64, simReads []Seq) {
+    err, 
+}
+*/
 
 func max(a int, b int) int {
     if a > b {
@@ -129,7 +128,7 @@ func (kmers Kmers) Swap(i, j int) {
 }
 
 func (kmers Kmers) Less(i, j int) bool {
-    return bytes.Compare(kmers[i].vals[:8], kmers[j].vals[:8]) == -1
+    return bytes.Compare(kmers[i][:8], kmers[j][:8]) == -1
 }
 
 // needed for sort.Interface
