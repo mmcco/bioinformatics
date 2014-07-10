@@ -1,0 +1,45 @@
+Repeat Sequence Phylogeny
+Analysis and use for sequence alignment
+10 Jul 2014
+Tags: foo, bar, baz OMIT
+
+Michael McConville
+IGM research intern under Dr. Ben Langmead
+momcconville@gmail.com
+https://github.com/plsql
+
+
+* What are repeat sequences?
+
+- tandem repeats (e.g. "attcgattcgattcg...")
+- interspersed repeats (single copy per instance, multiple instances)
+- deactivated copies of retroviruses
+- "junk DNA" such as telomeres ("ttaggg" tandem repeat)
+- gene regulation ("cag" tandem repeat on testosterone gene)
+- ~50% of the human genome and >80% of the maize genome consist of recognized repeat sequences (Xu _et_al_ 2013)
+- inactive gene copies
+- etc.
+
+
+* RepeatMasker
+- input: set of reference repeat sequences, reference genome
+- uses [[http://www.girinst.org/repbase/update/index.html][Repbase]] by default
+- finds all quality alignments of the reference repeats (termed _matches_, or _instances_)
+- *does*not* find novel repeat types
+- written entirely in Perl - a little slow and a little buggy
+
+[[repeatmasker.org]]
+
+
+* Golang
+- new systems language
+- by Google, but open source
+- 21st century systems
+- native resizable lists ("_slices_") and maps
+- bounds checking by default
+- native concurrency
+
+
+* Quick concurrency example
+
+.play conc-example-2.go /START OMIT/,/END OMIT/,/START OMIT/,/END OMIT/
