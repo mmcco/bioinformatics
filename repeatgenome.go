@@ -1,9 +1,9 @@
+package repeatgenome
+
 /*
    WARNING!!! This program is currently under development and may be buggy or broken.
 
-   A barebones (at the moment) Go script for parsing and minimizing repeats
-
-   https://gist.github.com/anonymous/aaabfb1b9a6e8b10c687
+   A barebones (at the moment) Go script for parsing and minimizing RepeatMasker output files alongside FASTA reference genomes.
 
    This script expects there to be a subdirectory of the current directory named after the reference genome used (e.g. "dm3") that contains the following files:
        * a RepeatMasker library containing:
@@ -11,9 +11,9 @@
            - the alignment information (e.g. "dm3.fa.align")
        * one or more reference genome files in FASTA format with the suffix ".fa"
 
-   Premature commenting is the root of all evil, and I have sinned. Please read comments skeptically.
+   Premature commenting is the root of all evil, and I have sinned. Please read comments skeptically - they will eventually be audited.
 
-   Heap-allocated values and map indices should probably be manually deleted in GetKrakenSlice to help the GC.
+   For portability's sake, the flags should be used as args to Generate() rather than globals.
 
    We should test a version that doesn't cache minimizers, as that seems to be a needless bottleneck. It could also be conditional on the number of CPUs available.
 
@@ -42,13 +42,10 @@
    The sole command line argument is the name of the reference genome (e.g. "dm3").
 */
 
-package minimize
-
 import (
     "bufio"
     "bytes"
     "encoding/json"
-    "flag"
     "fmt"
     "io"
     "io/ioutil"
@@ -64,13 +61,13 @@ import (
     "unsafe"
 )
 
-var err error
-
-var DEBUG      *bool
-var CPUPROFILE *bool
-var MEMPROFILE *bool
-var MIN        bool
-var JSON       *bool
+type ParseFlags struct {
+    Debug      bool
+    CPUProfile bool
+    MemProfile bool
+    Minimize   bool
+    WriteJSON  bool
+}
 
 // Match.SW_Score - Smith-Waterman score, describing the likeness to the repeat reference sequence
 // Match.PercDiv
@@ -110,6 +107,7 @@ type Match struct {
 
 type RepeatGenome struct {
     Name         string
+    ParseFlags   ParseFlags
     // maps a chromosome name to a map of its sequences
     // as discussed above, though, matches only contain 1D sequence indexes
     Chroms       map[string](map[string]string)
@@ -178,12 +176,6 @@ type ThreadResponse struct {
 type MinCache struct {
     sync.Mutex
     Cache map[uint64]uint64
-}
-
-func checkError(err error) {
-    if err != nil {
-        log.Fatal(err)
-    }
 }
 
 func seqToInt(seq string) uint64 {
@@ -264,23 +256,6 @@ func intRevComp(posInt uint64, seqLen uint8) uint64 {
         }
     }
     return revComp
-}
-
-// returns the number of lines and a slice of the lines
-func lines(byteSlice []byte) (numLines int, lines [][]byte) {
-    numLines = 0
-    for i := range byteSlice {
-        if byteSlice[i] == '\n' {
-            numLines++
-        }
-    }
-    lines = bytes.Split(byteSlice, []byte{'\n'})
-    // drop the trailing newlines
-    newline := []byte("\n")
-    for lastLine := lines[len(lines) - 1]; len(lines) > 0 && (len(lastLine) == 0 || bytes.Equal(lastLine, newline)); lastLine = lines[len(lines) - 1] {
-        lines = lines[:len(lines)-1]
-    }
-    return numLines, lines
 }
 
 func parseMatches(genomeName string) Matches {
@@ -434,11 +409,12 @@ func parseGenome(genomeName string) map[string](map[string]string) {
     return chroms
 }
 
-func Generate(genomeName string, k, m uint8) *RepeatGenome {
+func Generate(genomeName string, k, m uint8, parseFlags ParseFlags) *RepeatGenome {
     // we popoulate the RepeatGenome mostly with helper functions
     // we should consider whether it makes more sense for them to alter the object directly, than to return their results
     repeatGenome := new(RepeatGenome)
     repeatGenome.Name = genomeName
+    repeatGenome.ParseFlags = parseFlags
     repeatGenome.Chroms = parseGenome(genomeName)
     repeatGenome.Matches = parseMatches(genomeName)
     repeatGenome.getRepeats()
@@ -446,13 +422,48 @@ func Generate(genomeName string, k, m uint8) *RepeatGenome {
     repeatGenome.K = k
     repeatGenome.M = m
 
-    if MIN {
+    if repeatGenome.ParseFlags.Minimize {
         // calling the parallel minimizer and writing the result
         repeatGenome.GetKrakenSlice(true)
     }
 
-    if *JSON {
+    if repeatGenome.ParseFlags.WriteJSON {
         repeatGenome.WriteClassJSON(false, false)
+    }
+
+    if repeatGenome.ParseFlags.Debug {
+
+        fmt.Println()
+        for k, v := range repeatGenome.Chroms {
+            for k_, v_ := range v {
+                fmt.Printf("chrom: %s\tseq: %s\t%s...%s\n", k, k_, v_[:20], v_[len(v_)-20:])
+            }
+        }
+        fmt.Println()
+
+        fmt.Println()
+        fmt.Println("number of chromosomes parsed:", len(repeatGenome.Chroms))
+        fmt.Println()
+
+        repeatGenome.ClassTree.PrintBranches()
+        fmt.Println()
+        fmt.Println("number of ClassNodes:", len(repeatGenome.ClassTree.ClassNodes))
+        fmt.Println()
+
+        fmt.Println("repeatGenome.ClassTree.getLCA(repeatGenome.ClassTree.ClassNodes['DNA/TcMar-Mariner'], repeatGenome.ClassTree.ClassNodes['DNA/TcMar-Tc1']):", repeatGenome.ClassTree.getLCA(repeatGenome.ClassTree.ClassNodes["DNA/TcMar-Mariner"], repeatGenome.ClassTree.ClassNodes["DNA/TcMar-Tc1"]))
+
+        fmt.Println()
+        fmt.Println("min(5, 7):", min(5, 7))
+        fmt.Println("max64(int64(5), int64(7)):", max64(int64(5), int64(7)))
+        fmt.Println()
+
+        testSeq := "tgctcctgtcatgcatacgcaggtcatgcat"
+        offset, thisMin := getMinimizer(seqToInt(testSeq), uint8(len(testSeq)), 15)
+        fmt.Println("getMinimizer('tgctcctgtcatgcatacgcaggtcatgcat', 15) offset :", offset)
+        printSeqInt(thisMin, 15)
+        fmt.Println()
+
+        fmt.Println("Kmer struct size: %d\n", unsafe.Sizeof(Kmer{}))
     }
 
     return repeatGenome
@@ -542,54 +553,6 @@ func revComp(seq string) string {
         }
     }
     return string(revCompSeq)
-}
-
-func max(a int, b int) int {
-    if a > b {
-        return a
-    } else {
-        return b
-    }
-}
-
-func max32(a int32, b int32) int32 {
-    if a > b {
-        return a
-    } else {
-        return b
-    }
-}
-
-func maxU32(a uint32, b uint32) uint32 {
-    if a > b {
-        return a
-    } else {
-        return b
-    }
-}
-
-func max64(a int64, b int64) int64 {
-    if a > b {
-        return a
-    } else {
-        return b
-    }
-}
-
-func min(a, b int) int {
-    if a < b {
-        return a
-    } else {
-        return b
-    }
-}
-
-func minU64(a, b uint64) uint64 {
-    if a < b {
-        return a
-    } else {
-        return b
-    }
 }
 
 func (repeat *Repeat) Print() {
@@ -823,41 +786,6 @@ func (refGenome *RepeatGenome) PrintChromInfo() {
     }
 }
 
-// needed for sort.Interface
-func (kmers Kmers) Len() int {
-    return len(kmers)
-}
-
-func (kmers Kmers) Swap(i, j int) {
-    kmers[i], kmers[j] = kmers[j], kmers[i]
-}
-
-func (kmers Kmers) Less(i, j int) bool {
-    return bytes.Compare(kmers[i].vals[:8], kmers[j].vals[:8]) == -1
-}
-
-// needed for sort.Interface
-type Uint64Slice []uint64
-
-func (uint64s Uint64Slice) Len() int {
-    return len(uint64s)
-}
-
-func (uint64s Uint64Slice) Swap(i, j int) {
-    uint64s[i], uint64s[j] = uint64s[j], uint64s[i]
-}
-
-func (uint64s Uint64Slice) Less(i, j int) bool {
-    return uint64s[i] < uint64s[j]
-}
-func boolToInt(a bool) int {
-    if a {
-        return 1
-    } else {
-        return 0
-    }
-}
-
 // a saner way of doing this would be to allocate a single k-long []byte and have a function populate it before printing
 func (repeatGenome *RepeatGenome) WriteMins(minMap map[uint64]Kmers) error {
     k := repeatGenome.K
@@ -975,7 +903,7 @@ func fillSeq(slice []byte, seqInt uint64) {
 // specifically, we made sure not to make any heap allocations, which means reverse complements can never be explicitly evaluated
 func (repeatGenome *RepeatGenome) minimizeThread(minCache *MinCache, matchStart, matchEnd uint64, c chan ThreadResponse) {
     var startTime time.Time
-    if *DEBUG {
+    if repeatGenome.ParseFlags.Debug {
         startTime = time.Now()
     }
 
@@ -1044,7 +972,7 @@ func (repeatGenome *RepeatGenome) minimizeThread(minCache *MinCache, matchStart,
         }
     }
 
-    if *DEBUG {
+    if repeatGenome.ParseFlags.Debug {
         fmt.Println("\t\tThread life:", time.Since(startTime))
     }
 }
@@ -1052,7 +980,7 @@ func (repeatGenome *RepeatGenome) minimizeThread(minCache *MinCache, matchStart,
 func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
     // a rudimentary way of deciding how many threads to allow, should eventually be improved
     numCPU := runtime.NumCPU()
-    if *DEBUG {
+    if repeatGenome.ParseFlags.Debug {
         fmt.Printf("using %d CPUs\n", numCPU)
     }
     runtime.GOMAXPROCS(numCPU)
@@ -1157,7 +1085,7 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
         delete(minMap, thisMin)
     }
 
-    if *MEMPROFILE {
+    if repeatGenome.ParseFlags.MemProfile {
         f, err := os.Create(repeatGenome.Name + ".memprof")
         checkError(err)
         pprof.WriteHeapProfile(f)
@@ -1185,100 +1113,4 @@ func (repeatGenome *RepeatGenome) numKmers() uint64 {
         }
     }
     return numKmers
-}
-
-func main() {
-
-    if len(os.Args) < 2 {
-        fmt.Println("arg error - usage: ./minimize <flags> <reference genome dir>")
-        os.Exit(1)
-    }
-    genomeName := os.Args[len(os.Args) - 1]
-
-    CPUPROFILE = flag.Bool("cpuprof", false, "write cpu profile to file <genomeName>.cpuprof")
-    MEMPROFILE = flag.Bool("memprof", false, "write memory profile to <genomeName>.memprof")
-    DEBUG = flag.Bool("debug", false, "run and print debugging tests")
-    NOMIN := flag.Bool("nomin", false, "don't generate Kraken data structure")
-    JSON = flag.Bool("json", false, "write JSON representation of class tree to <genomeName>.classtree.json")
-    k_arg := flag.Uint("k", 31, "kmer length")
-    m_arg := flag.Uint("m", 15, "minimizer length")
-    flag.Parse()
-
-    if *CPUPROFILE {
-        fmt.Println("CPU profiler enabled")
-        f, err := os.Create(genomeName + ".cpuprof")
-        checkError(err)
-        pprof.StartCPUProfile(f)
-        defer pprof.StopCPUProfile()
-    }
-
-    if *MEMPROFILE {
-        fmt.Println("memory profiler enabled")
-    }
-
-    if *DEBUG {
-        fmt.Println("debug tests enabled")
-    }
-
-    // flip MIN
-    if *NOMIN {
-        MIN = false
-        fmt.Println("Kraken data structure disabled")
-    } else {
-        MIN = true
-    }
-
-    if *JSON && MIN {
-        fmt.Println("class tree JSON write enabled")
-    } else if *JSON && !MIN {
-        fmt.Println("class tree JSON write enabled")
-        fmt.Println("WARNING: you are writing the class tree JSON without minimizing - all node sizes will be 0")
-    }
-
-    var k, m uint8
-    if *k_arg > 255 || *m_arg > 255 {
-        log.Fatal("k and m must be >= 255")
-    } else {
-        k = uint8(*k_arg)
-        m = uint8(*m_arg)
-        fmt.Println("k =", k)
-        fmt.Println("m =", m)
-    }
-
-    repeatGenome := Generate(genomeName, k, m)
-
-    if *DEBUG {
-
-        fmt.Println()
-        for k, v := range repeatGenome.Chroms {
-            for k_, v_ := range v {
-                fmt.Printf("chrom: %s\tseq: %s\t%s...%s\n", k, k_, v_[:20], v_[len(v_)-20:])
-            }
-        }
-        fmt.Println()
-
-        fmt.Println()
-        fmt.Println("number of chromosomes parsed:", len(repeatGenome.Chroms))
-        fmt.Println()
-
-        repeatGenome.ClassTree.PrintBranches()
-        fmt.Println()
-        fmt.Println("number of ClassNodes:", len(repeatGenome.ClassTree.ClassNodes))
-        fmt.Println()
-
-        //fmt.Println("classTree.getLCA(classTree.ClassNodes['DNA/TcMar-Mariner'], classTree.ClassNodes['DNA/TcMar-Tc1']):", classTree.getLCA(classTree.ClassNodes["DNA/TcMar-Mariner"], classTree.ClassNodes["DNA/TcMar-Tc1"]))
-
-        fmt.Println()
-        fmt.Println("min(5, 7):", min(5, 7))
-        fmt.Println("max64(int64(5), int64(7)):", max64(int64(5), int64(7)))
-        fmt.Println()
-
-        testSeq := "tgctcctgtcatgcatacgcaggtcatgcat"
-        offset, thisMin := getMinimizer(seqToInt(testSeq), uint8(len(testSeq)), 15)
-        fmt.Println("getMinimizer('tgctcctgtcatgcatacgcaggtcatgcat', 15) offset :", offset)
-        printSeqInt(thisMin, 15)
-        fmt.Println()
-
-        fmt.Println("Kmer struct size: %d\n", unsafe.Sizeof(Kmer{}))
-    }
 }
