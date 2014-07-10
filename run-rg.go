@@ -8,14 +8,13 @@ import (
     "runtime/pprof"
 )
 
-
 func main() {
 
     if len(os.Args) < 2 {
         fmt.Println("arg error - usage: ./minimize <flags> <reference genome dir>")
         os.Exit(1)
     }
-    genomeName := os.Args[len(os.Args) - 1]
+    genomeName := os.Args[len(os.Args)-1]
 
     cpuProfile := flag.Bool("cpuprof", false, "write cpu profile to file <genomeName>.cpuprof")
     memProfile := flag.Bool("memprof", false, "write memory profile to <genomeName>.memprof")

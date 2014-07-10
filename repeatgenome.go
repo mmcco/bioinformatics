@@ -85,29 +85,29 @@ type ParseFlags struct {
 // Match.RepeatID - a numerical ID for the repeat type (starts at 1)
 //     Match.Fullname - not in parsed data file - simply repeatClass concatenated - used for map indexing
 type Match struct {
-    SW_Score      int32
-    PercDiv       float64
-    PercDel       float64
-    PercIns       float64
-    SeqName       string
-    SeqStart      uint64
-    SeqEnd        uint64
-    SeqRemains    uint64
-    IsRevComp     bool
-    RepeatClass   []string
+    SW_Score    int32
+    PercDiv     float64
+    PercDel     float64
+    PercIns     float64
+    SeqName     string
+    SeqStart    uint64
+    SeqEnd      uint64
+    SeqRemains  uint64
+    IsRevComp   bool
+    RepeatClass []string
     // in weird cases, RepeatStart can be negative, so they must be signed
     RepeatStart   int64
     RepeatEnd     int64
     RepeatRemains int64
     RepeatID      uint32
 
-    FullName      string
-    ClassNode     *ClassNode
+    FullName  string
+    ClassNode *ClassNode
 }
 
 type RepeatGenome struct {
-    Name         string
-    ParseFlags   ParseFlags
+    Name       string
+    ParseFlags ParseFlags
     // maps a chromosome name to a map of its sequences
     // as discussed above, though, matches only contain 1D sequence indexes
     Chroms       map[string](map[string]string)
@@ -130,7 +130,7 @@ type ClassTree struct {
     NodesByID  []*ClassNode
     // a pointer to the the class tree's root, used for recursive descent etc.
     // we explicitly create the root (because RepeatMatcher doesn't)
-    Root       *ClassNode
+    Root *ClassNode
 }
 
 type Kmer struct {
@@ -143,7 +143,7 @@ type Repeat struct {
     // assigned by RepeatMasker, in simple incremented order starting from 1
     // they are therefore not compatible across genomes
     // we give root ID = 0
-    ID        uint32
+    ID uint32
     // a list containing the repeat's ancestry path, from top down
     // root is implicit, and is therefore excluded from the list
     ClassList []string
@@ -161,16 +161,16 @@ type ClassNode struct {
 }
 
 // type synonyms, necessary to implement interfaces (e.g. sort) and methods
-type Kmers      []*Kmer
-type MinMap     map[uint64]Kmers
-type Repeats    []Repeat
-type Matches    []Match
+type Kmers []*Kmer
+type MinMap map[uint64]Kmers
+type Repeats []Repeat
+type Matches []Match
 
 //type Chroms map[string](map[string][]byte)
 
 type ThreadResponse struct {
-    KmerInt      uint64
-    Relative  *ClassNode
+    KmerInt  uint64
+    Relative *ClassNode
 }
 
 type MinCache struct {
@@ -211,7 +211,7 @@ func revCompToInt(seq string) uint64 {
     var seqInt uint64 = 0
     for i := range seq {
         seqInt = seqInt << 2
-        switch seq[len(seq) - (i + 1)] {
+        switch seq[len(seq)-(i+1)] {
         case 'a':
             seqInt |= 3
             break
@@ -338,7 +338,7 @@ func parseMatches(genomeName string) Matches {
         if match.IsRevComp {
             match.RepeatStart = match.RepeatRemains
             match.RepeatEnd = match.RepeatStart
-            match.RepeatRemains = match.RepeatRemains+(match.RepeatEnd-match.RepeatStart)
+            match.RepeatRemains = match.RepeatRemains + (match.RepeatEnd - match.RepeatStart)
         }
 
         // decrement match.SeqStart and match.RepeatStart so that they work from a start index of 0 rather than 1
@@ -387,11 +387,11 @@ func parseGenome(genomeName string) map[string](map[string]string) {
                 seqLine := bytes.TrimSpace(seqLines[i])
                 if seqLine[0] == byte('>') {
                     seqName = string(bytes.TrimSpace(seqLine[1:]))
-                    if !warned && seqName != chromFilename[:len(chromFilename) - 3] {
+                    if !warned && seqName != chromFilename[:len(chromFilename)-3] {
                         fmt.Println("WARNING: reference genome is two-dimensional, containing sequences not named after their chromosome.")
                         fmt.Println("Because RepeatMasker supplied only one-dimensional indexing, this may cause unexpected behavior or program failure.")
                         fmt.Println("seqName:", seqName, "\tlen(seqName):", len(seqName))
-                        fmt.Println("chrom name:", chromFilename[:len(chromFilename) - 3], "\tlen(chrom name):", len(chromFilename) - 3)
+                        fmt.Println("chrom name:", chromFilename[:len(chromFilename)-3], "\tlen(chrom name):", len(chromFilename)-3)
                         warned = true
                     }
                 } else {
@@ -503,7 +503,7 @@ func getMinimizer(kmer uint64, k, m uint8) (uint8, uint64) {
     var currOffset uint8 = 0
     numExtraBases := 32 - k
     revCompKmer := intRevComp(kmer, k)
-    currMin := kmer >> uint64(64 - 2 * (32 - k + m))
+    currMin := kmer >> uint64(64-2*(32-k+m))
     possMin := currMin
     numHangingBases := k - m
     var i uint8
@@ -512,16 +512,16 @@ func getMinimizer(kmer uint64, k, m uint8) (uint8, uint64) {
         // overflow off the first excluded base
         possMin = kmer << (2 * (numExtraBases + i))
         // return to proper alignment
-        possMin >>= 64 - 2 * m
-        
+        possMin >>= 64 - 2*m
+
         if possMin < currMin {
             currMin = possMin
             currOffset = i
         }
 
         possMin = revCompKmer << (2 * (numExtraBases + i))
-        possMin >>= 64 - 2 * m
-        
+        possMin >>= 64 - 2*m
+
         if possMin < currMin {
             currMin = possMin
             currOffset = numHangingBases - i
@@ -589,8 +589,8 @@ func (classNode *ClassNode) printTreeRec(indent int, printLeaves bool) {
 
 // used only for recursive JSON printing
 type JSONNode struct {
-    Name string          `json:"name"`
-    Size uint64          `json:"size"`
+    Name     string      `json:"name"`
+    Size     uint64      `json:"size"`
     Children []*JSONNode `json:"children"`
 }
 
@@ -928,9 +928,9 @@ func (repeatGenome *RepeatGenome) minimizeThread(minCache *MinCache, matchStart,
             continue
         }
 
-        KmerLoop:
-        for j := match.SeqStart; j <= match.SeqEnd - k_; j++ {
-            kmerSeq = seq[j : j + k_]
+    KmerLoop:
+        for j := match.SeqStart; j <= match.SeqEnd-k_; j++ {
+            kmerSeq = seq[j : j+k_]
             // we begin by skipping any kmers containing n's
             // we start checking from the end for maximum skipping efficiency
             for x = int(k) - 1; x >= 0; x-- {
@@ -953,12 +953,12 @@ func (repeatGenome *RepeatGenome) minimizeThread(minCache *MinCache, matchStart,
 
                 c <- ThreadResponse{kmerInt, match.ClassNode}
             } else {
-                possMin = seqToInt(kmerSeq[k - m : ])
+                possMin = seqToInt(kmerSeq[k-m:])
                 if possMin < currMin {
                     currMin = possMin
                     currOffset = k - m
                 }
-                possMin = revCompToInt(kmerSeq[k - m : ])
+                possMin = revCompToInt(kmerSeq[k-m:])
                 if possMin < currMin {
                     currMin = possMin
                     currOffset = k - m
@@ -992,7 +992,7 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
     minCache.Cache = make(map[uint64]uint64)
 
     numKmers := repeatGenome.numKmers()
-    fmt.Printf("expecting >= %d million kmers\n", numKmers / 1000000)
+    fmt.Printf("expecting >= %d million kmers\n", numKmers/1000000)
 
     for i := 0; i < numCPU; i++ {
         mStart = uint64(i * len(repeatGenome.Matches) / numCPU)
@@ -1012,10 +1012,10 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
 
     for i = 0; i < numKmers; i++ {
         if i%5000000 == 0 {
-            fmt.Println(i / 1000000, "million kmers processed")
+            fmt.Println(i/1000000, "million kmers processed")
         }
 
-        response = <- c
+        response = <-c
         kmerInt, relative = response.KmerInt, response.Relative
 
         if relative == nil {
@@ -1100,11 +1100,11 @@ func (repeatGenome *RepeatGenome) numKmers() uint64 {
     seqs := []string{}
     var match *Match
 
-    splitOnN := func(c rune) bool {return c == 'n'}
+    splitOnN := func(c rune) bool { return c == 'n' }
 
     for i := range repeatGenome.Matches {
         match = &repeatGenome.Matches[i]
-        seq = repeatGenome.Chroms[match.SeqName][match.SeqName][match.SeqStart : match.SeqEnd]
+        seq = repeatGenome.Chroms[match.SeqName][match.SeqName][match.SeqStart:match.SeqEnd]
         seqs = strings.FieldsFunc(seq, splitOnN)
         for j := range seqs {
             if len(seqs[j]) >= k {

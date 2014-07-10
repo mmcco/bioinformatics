@@ -1,5 +1,9 @@
 package repeatgenome
 
+/*
+   A collection of trivial functions used in other source files of the repeatgenome package.
+*/
+
 import (
     "bytes"
     "log"
@@ -24,7 +28,7 @@ func lines(byteSlice []byte) (numLines int, lines [][]byte) {
     lines = bytes.Split(byteSlice, []byte{'\n'})
     // drop the trailing newlines
     newline := []byte("\n")
-    for lastLine := lines[len(lines) - 1]; len(lines) > 0 && (len(lastLine) == 0 || bytes.Equal(lastLine, newline)); lastLine = lines[len(lines) - 1] {
+    for lastLine := lines[len(lines)-1]; len(lines) > 0 && (len(lastLine) == 0 || bytes.Equal(lastLine, newline)); lastLine = lines[len(lines)-1] {
         lines = lines[:len(lines)-1]
     }
     return numLines, lines
@@ -105,6 +109,7 @@ func (uint64s Uint64Slice) Swap(i, j int) {
 func (uint64s Uint64Slice) Less(i, j int) bool {
     return uint64s[i] < uint64s[j]
 }
+
 func boolToInt(a bool) int {
     if a {
         return 1
