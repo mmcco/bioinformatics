@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+  <head>
+    <meta http-equiv="Content-Type" content="text/html;charset=utf-8">
+    <script src="http://d3js.org/d3.v3.min.js"></script>
+<script src="http://ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js"></script>
+
+  </head>
+  <body>
+
+    <div id="viz"></div>
+
+<script type="text/javascript">
+
+      var treeData = {
+          "name": "root",
+          "size": 1544196,
+          "children": [{
+              "name": "Satellite",
+              "size": 76142,
+              "children": []
+          }, {
+              "name": "Simple_repeat",
+              "size": 26349,
+              "children": []
+          }, {
+              "name": "LTR",
+              "size": 250914,
+              "children": [{
+                  "name": "LTR/Gypsy",
+                  "size": 454371,
+                  "children": []
+              }, {
+                  "name": "LTR/Pao",
+                  "size": 85813,
+                  "children": []
+              }, {
+                  "name": "LTR/Copia",
+                  "size": 26922,
+                  "children": []
+              }]
+          }, {
+              "name": "RC",
+              "size": 10361,
+              "children": [{
+                  "name": "RC/Helitron",
+                  "size": 32448,
+                  "children": []
+              }]
+          }, {
+              "name": "Low_complexity",
+              "size": 975,
+              "children": []
+          }, {
+              "name": "LINE",
+              "size": 154981,
+              "children": [{
+                  "name": "LINE/Jockey",
+                  "size": 163797,
+                  "children": []
+              }, {
+                  "name": "LINE/I",
+                  "size": 17652,
+                  "children": []
+              }, {
+                  "name": "LINE/R1",
+                  "size": 76565,
+                  "children": []
+              }, {
+                  "name": "LINE/CR1",
+                  "size": 58254,
+                  "children": []
+              }, {
+                  "name": "LINE/LOA",
+                  "size": 19000,
+                  "children": []
+              }, {
+                  "name": "LINE/R2",
+                  "size": 3392,
+                  "children": []
+              }]
+          }, {
+              "name": "DNA",
+              "size": 31261,
+              "children": [{
+                  "name": "DNA/P",
+                  "size": 32942,
+                  "children": []
+              }, {
+                  "name": "DNA/TcMar-Tc1",
+                  "size": 20265,
+                  "children": []
+              }, {
+                  "name": "DNA/TcMar-Pogo",
+                  "size": 86,
+                  "children": []
+              }, {
+                  "name": "DNA/hAT-hobo",
+                  "size": 3360,
+                  "children": []
+              }, {
+                  "name": "DNA/CMC-Transib",
+                  "size": 13334,
+                  "children": []
+              }, {
+                  "name": "DNA/PiggyBac",
+                  "size": 558,
+                  "children": []
+              }, {
+                  "name": "DNA/TcMar-Mariner",
+                  "size": 8,
+                  "children": []
+              }, {
+                  "name": "DNA/MULE-NOF",
+                  "size": 466,
+                  "children": []
+              }]
+          }, {
+              "name": "ARTEFACT",
+              "size": 0,
+              "children": []
+          }, {
+              "name": "rRNA",
+              "size": 10370,
+              "children": []
+          }, {
+              "name": "RNA",
+              "size": 77,
+              "children": []
+          }]
+      };
+
+      var d = new $.Deferred();
+      var strokeColors = {};
+
+      $(document).ready(function () {
+          var width = $(window).width() - 65,
+              height = $(window).height() - 65,
+              diameter = width < height ? width : height;
+
+          var diagonal = d3.svg.diagonal.radial()
+              .projection(function (d) {
+                  return [d.y, d.x / 180 * Math.PI];
+              });
+
+          var color = d3.scale.category20();
+
+          var vis = d3.select("#viz").append("svg")
+              .attr("width", diameter)
+              .attr("height", diameter)
+              .append("g")
+              .attr("transform", "translate(" + diameter / 2 + "," + diameter / 2 + ")");
+
+          var tree = d3.layout.tree()
+              .size([360, diameter / 2 - 150])
+              .separation(function (a, b) {
+                  return (a.parent == b.parent ? 1 : 2) / a.depth;
+              });
+
+          var nodes = tree.nodes(treeData);
+          var link = vis.selectAll("pathlink")
+              .data(tree.links(nodes))
+              .enter().append("path")
+              .attr("class", "link")
+              .attr("d", diagonal);
+
+          var node = vis.selectAll("g.node")
+              .data(nodes)
+              .enter().append("g")
+              .attr("class", "node")
+              .attr("num-kmers", function (d) {
+                  return d.size;
+              })
+              .attr("name", function (d) {
+                  return d.name;
+              })
+              .attr("transform", function (d) {
+                  return "rotate(" + (d.x - 90) + ")translate(" + d.y + ")";
+              });
+
+          node.append("circle")
+              .attr("r", function () {
+                  //console.log(jQuery($(this)).parent().attr("num-kmers"));
+                  var logSize = Math.log(jQuery($(this)).parent().attr("num-kmers"));
+                  //console.log(logSize);
+                  return logSize < parseFloat(0) ? parseFloat(1) : logSize;
+              })
+              .style("stroke", function (d, i) {
+                  var nodeName = $(this).parent().attr("name");
+                  var ancestry = nodeName.split('/');
+                  var depth = ancestry.length;
+                  if (nodeName === "root") {
+                      strokeColors[nodeName] = d3.hsl("black");
+                  } else if (depth === 1) {
+                      strokeColors[nodeName] = d3.hsl(color(i));
+                      //return d3.hsl(parentCirc.attr("stroke")).brighter();
+                  } else {
+                      strokeColors[nodeName] = strokeColors[ancestry.slice(0, -1)].darker();
+                  }
+                  return strokeColors[nodeName];
+              })
+              .style("fill", function(d, i) {
+                  return strokeColors[$(this).parent().attr("name")].brighter();
+              });
+
+          node.append("text")
+              .attr("dy", ".31em")
+              .attr("text-anchor", function (d) {
+                  return d.x < 180 ? "start" : "end";
+              })
+              .attr("transform", function (d) {
+                  var dotRad = jQuery($(this).parent()).find('circle').attr("r");
+                  //console.log(d.name + " dotRad: " + dotRad)
+                  var transDist = parseFloat(dotRad) + parseFloat(8);
+                  //console.log(transDist);
+                  return d.x < 180 ? "translate(" + transDist + ")" : "rotate(180)translate(" + -transDist + ")";
+              })
+              .text(function (d) {
+                  return d.name;
+              });
+
+          d3.select(self.frameElement).style("height", diameter + "px");
+
+          d.resolve();
+      });
+
+      $.when(d).done(function () {
+          $('circle').on("mouseover", function () {
+              $("#rep-info").text($(this).parent().attr("name"));
+              $(this).css("fill", $(this).css("stroke"));
+          });
+          
+          $('circle').on("mouseout", function () {
+              $("#rep-info").text("");
+              $(this).css("fill", strokeColors[$(this).parent().attr("name")].brighter());
+          });
+      });
+
+</script>
+    
+<style>
+.node circle {
+  fill: #fff;
+  stroke: steelblue;
+  stroke-width: 2px;
+}
+
+.node {
+  font: 12px Arial;
+}
+
+text {
+  font-family: Arial;
+}
+
+.link {
+  fill: none;
+  stroke: #ccc;
+  stroke-width: 1.5px;
+}
+</style>
+
+	<p id="rep-info"></p>
+
+  </body>
+</html>
