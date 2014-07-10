@@ -6,7 +6,9 @@ package repeatgenome
 
 import (
     "bytes"
+    "io/ioutil"
     "log"
+    "sync"
 )
 
 var err error
@@ -17,8 +19,43 @@ func checkError(err error) {
     }
 }
 
+func merge(cs [](chan int)) <-chan int {
+    var wg sync.WaitGroup
+    out := make(chan int)
+
+    // Start an output goroutine for each input channel in cs.  output
+    // copies values from c to out until c is closed, then calls wg.Done.
+    wg.Add(len(cs))
+    for _, c := range cs {
+        go func(c <-chan int) {
+            for n := range c {
+                    out <- n
+            }
+            wg.Done()
+        }(c)
+    }
+
+    // Start a goroutine to close out once all the output goroutines are
+    // done.  This must start after the wg.Add call.
+    go func() {
+        wg.Wait()
+        close(out)
+    }()
+    return out
+}
+
+func fileLines(filepath string) (err error, numLines uint64, byteLines [][]byte) {
+    rawBytes, err := ioutil.ReadFile(filepath)
+    if err != nil {
+        return err, 0, nil
+    } else {
+        numLines, byteLines = lines(rawBytes)
+        return nil, numLines, byteLines
+    }
+}
+
 // returns the number of lines and a slice of the lines
-func lines(byteSlice []byte) (numLines int, lines [][]byte) {
+func lines(byteSlice []byte) (numLines uint64, lines [][]byte) {
     numLines = 0
     for i := range byteSlice {
         if byteSlice[i] == '\n' {

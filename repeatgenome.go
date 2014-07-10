@@ -23,6 +23,8 @@ package repeatgenome
 
    I should probably change some variable names, like repeatGenome, to less verbose variants, and use more aliases.
 
+   Ranges should be changed to use actual values instead of indexes.
+
    Slice sizes should be specified in the make() call when the size is known.
 
    seqToInt and revCompToInt need minor cleanup and a potential name-change.
@@ -383,7 +385,8 @@ func parseGenome(genomeName string) map[string](map[string]string) {
             // the list is concatenated at the end for efficiency's sake
             seqMap := make(map[string][][]byte)
             var seqName string
-            for i := 0; i < numLines; i++ {
+            var i uint64
+            for i = 0; i < numLines; i++ {
                 seqLine := bytes.TrimSpace(seqLines[i])
                 if seqLine[0] == byte('>') {
                     seqName = string(bytes.TrimSpace(seqLine[1:]))
