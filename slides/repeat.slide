@@ -21,25 +21,89 @@ https://github.com/plsql
 - etc.
 
 
+* Our goals
+
+- next-gen sequencing reads from many repeat sequences can align in *many* places
+- this makes them of little worth
+- next-gen sequencing often can't sequence large tandem repeats or highly similar interspersed repeats (hence _exome_sequencing_)
+- high prevalence, low complexity... why not filter for them?
+
+
 * RepeatMasker
 - input: set of reference repeat sequences, reference genome
 - uses [[http://www.girinst.org/repbase/update/index.html][Repbase]] by default
 - finds all quality alignments of the reference repeats (termed _matches_, or _instances_)
 - *does*not* find novel repeat types
+- output data sets available for download
 - written entirely in Perl - a little slow and a little buggy
 
 [[repeatmasker.org]]
 
 
-* Golang
+* Match size distribution
+
+.image match-size-histogram.svg
+
+
+* Golang?! Why?
+
 - new systems language
 - by Google, but open source
-- 21st century systems
-- native resizable lists ("_slices_") and maps
+- 21st century systems - safe and fast
+- native resizable lists (_slices_) and maps
 - bounds checking by default
+- no pointer arithmetic (unless you _really_ want it)
 - native concurrency
+- supported by GCC, easily linkable with C/C++ (e.g. the Tuxedo suite)
 
 
-* Quick concurrency example
+* Quick concurrency examples
 
-.play conc-example-2.go /START OMIT/,/END OMIT/,/START OMIT/,/END OMIT/
+.code conc-snippet.go
+
+The *go* keyword is used to spawn threads.
+
+
+* Quick concurrency examples
+
+.code chan-snippet.go
+
+The builtin type *chan*, for _channel_, is used to communicate between threads.
+
+* Kraken approach
+
+- we are currently using the Kraken algorithm
+- the first step is to create a tree of all repeat types...
+
+* Leafless phylogeny tree for dm3 (fruit fly)
+.html slides-tree.html
+
+
+* Kraken cont'd
+
+- then find each kmer's lowest common ancestor (LCA) in this tree
+- that is, the kmer only exists in repeats on that subtree
+- we find each kmers minimizer (its lexicographically smallest m-mer)
+- like vanilla Kraken, we're currently using k = 31 and m = 15
+- the list of kmers is sorted by minimizer, so that similar kmers are close (improves speed via caching)
+
+
+* Challenges
+
+- lots of data means lots of memory
+- *>41_million* 31-mers for dm3 (fruit fly)
+- *>1.55_billion* 31-mers for hg38 (human)
+- bugs and idiosynchrasies of RepeatMasker
+- the ancestry tree is shallow - at most four deep
+- some ancestry classifications are not based on likeness, must be manually edited
+
+
+* Successes
+
+- multithreaded and fast library generation - dm3 takes two minutes
+- distribution of kmers across the tree is less-than-stellar, but promising
+
+
+* Future goals
+
+- we are now testing the speed with which simulated reads can be indexed
