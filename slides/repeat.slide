@@ -11,30 +11,31 @@ https://github.com/plsql
 
 * What are repeat sequences?
 
-- tandem repeats (e.g. "attcgattcgattcg...")
+- tandem repeats (e.g. `"attcgattcgattcg..."`)
 - interspersed repeats (single copy per instance, multiple instances)
 - deactivated copies of retroviruses
-- "junk DNA" such as telomeres ("ttaggg" tandem repeat)
-- gene regulation ("cag" tandem repeat on testosterone gene)
+- are sometimes functionally significant
+- telomeres (`"ttaggg"` tandem repeat) protect chromatid ends during gene replication
+- gene regulation (e.g. `"cag"` tandem repeat on testosterone gene)
 - ~50% of the human genome and >80% of the maize genome consist of recognized repeat sequences (Xu _et_al_ 2013)
-- inactive gene copies
-- etc.
 
 
 * Our goals
 
 - next-gen sequencing reads from many repeat sequences can align in *many* places
-- this makes them of little worth
-- next-gen sequencing often can't sequence large tandem repeats or highly similar interspersed repeats (hence _exome_sequencing_)
-- high prevalence, low complexity... why not filter for them?
+- _ex._ where to align read `"tagt"` in the reference sequence `"tagtagtagtagtagtagtagtag"`?
+- if all your reads are four bases long, you can't even tell how long the reference sequence is!
+- hence exome sequencing
+- sequencing reads from repeats are often of little worth
+- high prevalence, low complexity, low value... why not filter them?
 
 
 * RepeatMasker
 - input: set of reference repeat sequences, reference genome
-- uses [[http://www.girinst.org/repbase/update/index.html][Repbase]] by default
-- finds all quality alignments of the reference repeats (termed _matches_, or _instances_)
+- uses [[http://www.girinst.org/repbase/update/index.html][Repbase]] for repeat references by default
+- finds all quality alignments of the reference genome to the reference repeats (termed _matches_, or _instances_)
 - *does*not* find novel repeat types
-- output data sets available for download
+- prefab output data sets available for download
 - written entirely in Perl - a little slow and a little buggy
 
 [[repeatmasker.org]]
@@ -70,6 +71,8 @@ The *go* keyword is used to spawn threads.
 
 The builtin type *chan*, for _channel_, is used to communicate between threads.
 
+Kind of like a queue with a semaphore.
+
 * Kraken approach
 
 - we are currently using the Kraken algorithm
@@ -94,16 +97,23 @@ The builtin type *chan*, for _channel_, is used to communicate between threads.
 - *>41_million* 31-mers for dm3 (fruit fly)
 - *>1.55_billion* 31-mers for hg38 (human)
 - bugs and idiosynchrasies of RepeatMasker
-- the ancestry tree is shallow - at most four deep
-- some ancestry classifications are not based on likeness, must be manually edited
+- some RepeatMasker ancestry classifications are not based on likeness, must be manually edited
+- the ancestry tree is shallow - maximum path length of four...
+
+
+* LCA node depth
+
+.image lca-depth-bar.svg
 
 
 * Successes
 
 - multithreaded and fast library generation - dm3 takes two minutes
 - distribution of kmers across the tree is less-than-stellar, but promising
+- less complex repeats have worked particularly well
 
 
 * Future goals
 
 - we are now testing the speed with which simulated reads can be indexed
+- using only less complex repeat types - RepeatMasker and custom algorithms will be used
