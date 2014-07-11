@@ -1,5 +1,5 @@
 set terminal svg
-set output 'lca-depth-histogram.svg'
+set output 'lca-depth-bar.svg'
 set title "Distr. of LCA Node Depth by Kmer in dm3" 
 set style fill solid
 set logscale y
