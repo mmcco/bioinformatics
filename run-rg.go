@@ -48,7 +48,7 @@ func main() {
     }
 
     genKraken := !(*noKraken)
-    writeKraken := genKraken && *dontWriteMins
+    writeKraken := genKraken && !*dontWriteMins
     if !genKraken {
         fmt.Println("Kraken data structure disabled")
         fmt.Println()

@@ -20,17 +20,17 @@ func checkError(err error) {
     }
 }
 
-func merge(cs [](chan interface{})) <-chan interface{} {
+func merge(cs [](chan ThreadResponse)) <-chan ThreadResponse {
     var wg sync.WaitGroup
     //elemType := reflect.TypeOf(cs).Elem()
     //chanType := reflect.ChanOf(RecvDir, elemType)
-    out := make(chan interface{})
+    out := make(chan ThreadResponse)
 
     // Start an output goroutine for each input channel in cs.  output
     // copies values from c to out until c is closed, then calls wg.Done.
     wg.Add(len(cs))
     for _, c := range cs {
-        go func(c chan interface{}) {
+        go func(c chan ThreadResponse) {
             for n := range c {
                     out <- n
             }

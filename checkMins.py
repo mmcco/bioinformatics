@@ -32,7 +32,7 @@ if __name__ == "__main__":
                 else:
                     fields = line.split()
                     if len(fields) != 2:
-                        raise Exception("ERROR: malformed kmer line")
+                        raise Exception("ERROR: malformed kmer line:", line)
                     kmer = fields[0]
                     if kmer in kmers:
                         print "kmer", kmer, "listed twice"

@@ -59,7 +59,6 @@ import (
     "strconv"
     "strings"
     "sync"
-    "time"
     "unsafe"
 )
 
@@ -466,7 +465,7 @@ func Generate(genomeName string, k, m uint8, parseFlags ParseFlags) *RepeatGenom
         fmt.Println("max64(int64(5), int64(7)):", max64(int64(5), int64(7)))
         fmt.Println()
 
-        testSeq := "tgctcctgtcatgcatacgcaggtcatgcat"
+        testSeq := "atgtttgtgtttttcataaagacgaaagatg"
         offset, thisMin := getMinimizer(seqToInt(testSeq), uint8(len(testSeq)), 15)
         fmt.Println("getMinimizer('tgctcctgtcatgcatacgcaggtcatgcat', 15) offset :", offset)
         printSeqInt(thisMin, 15)
@@ -911,11 +910,6 @@ func fillSeq(slice []byte, seqInt uint64) {
 // some of the logic in here is deeply nested or non-obvious for efficiency's sake
 // specifically, we made sure not to make any heap allocations, which means reverse complements can never be explicitly evaluated
 func (repeatGenome *RepeatGenome) minimizeThread(minCache *MinCache, matchStart, matchEnd uint64, c chan ThreadResponse) {
-    var startTime time.Time
-    if repeatGenome.ParseFlags.Debug {
-        startTime = time.Now()
-    }
-
     var match *Match
     var seqLen uint64
     k := repeatGenome.K
@@ -945,6 +939,8 @@ func (repeatGenome *RepeatGenome) minimizeThread(minCache *MinCache, matchStart,
             for x = int(k) - 1; x >= 0; x-- {
                 if kmerSeq[x] == byte('n') {
                     j += uint64(x)
+                    // effectively clears the minimizer cache
+                    currOffset = 0
                     continue KmerLoop
                 }
             }
@@ -981,9 +977,7 @@ func (repeatGenome *RepeatGenome) minimizeThread(minCache *MinCache, matchStart,
         }
     }
 
-    if repeatGenome.ParseFlags.Debug {
-        fmt.Println("\t\tThread life:", time.Since(startTime))
-    }
+    close(c)
 }
 
 func (repeatGenome *RepeatGenome) getKrakenSlice() {
@@ -993,7 +987,6 @@ func (repeatGenome *RepeatGenome) getKrakenSlice() {
         fmt.Printf("using %d CPUs\n", numCPU)
     }
     runtime.GOMAXPROCS(numCPU)
-    c := make(chan ThreadResponse, 100000)
     var mStart, mEnd uint64
     // used so that we don't have to go searching through lists each time
     kmerMap := make(map[uint64]*Kmer)
@@ -1003,9 +996,12 @@ func (repeatGenome *RepeatGenome) getKrakenSlice() {
     numKmers := repeatGenome.numKmers()
     fmt.Printf("expecting >= %d million kmers\n", numKmers/1000000)
 
+    var threadChans [](chan ThreadResponse)
     for i := 0; i < numCPU; i++ {
         mStart = uint64(i * len(repeatGenome.Matches) / numCPU)
         mEnd = uint64((i + 1) * len(repeatGenome.Matches) / numCPU)
+        c := make(chan ThreadResponse, 1000)
+        threadChans = append(threadChans, c)
         go repeatGenome.minimizeThread(minCache, mStart, mEnd, c)
     }
 
@@ -1013,18 +1009,17 @@ func (repeatGenome *RepeatGenome) getKrakenSlice() {
     // this seems to be the rate-limiting section, as threads use only ~6-7 CPU-equivalents
     // it should therefore be optimized before other sections
     var kmer *Kmer
-    var response ThreadResponse
-    var i, kmerInt uint64
+    var kmersProcessed, kmerInt uint64
     var lca_ID uint16
     var lca, relative *ClassNode
     var exists bool
 
-    for i = 0; i < numKmers; i++ {
-        if i%5000000 == 0 {
-            fmt.Println(i/1000000, "million kmers processed")
+    for response := range merge(threadChans) {
+        if kmersProcessed%5000000 == 0 {
+            fmt.Println(kmersProcessed/1000000, "million kmers processed")
         }
+        kmersProcessed++
 
-        response = <-c
         kmerInt, relative = response.KmerInt, response.Relative
 
         if relative == nil {
