@@ -8,6 +8,7 @@ import (
     "bytes"
     "io/ioutil"
     "log"
+    //"reflect"
     "sync"
 )
 
@@ -19,15 +20,17 @@ func checkError(err error) {
     }
 }
 
-func merge(cs [](chan int)) <-chan int {
+func merge(cs [](chan interface{})) <-chan interface{} {
     var wg sync.WaitGroup
-    out := make(chan int)
+    //elemType := reflect.TypeOf(cs).Elem()
+    //chanType := reflect.ChanOf(RecvDir, elemType)
+    out := make(chan interface{})
 
     // Start an output goroutine for each input channel in cs.  output
     // copies values from c to out until c is closed, then calls wg.Done.
     wg.Add(len(cs))
     for _, c := range cs {
-        go func(c <-chan int) {
+        go func(c chan interface{}) {
             for n := range c {
                     out <- n
             }

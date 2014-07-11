@@ -19,8 +19,9 @@ func main() {
     cpuProfile := flag.Bool("cpuprof", false, "write cpu profile to file <genomeName>.cpuprof")
     memProfile := flag.Bool("memprof", false, "write memory profile to <genomeName>.memprof")
     debug := flag.Bool("debug", false, "run and print debugging tests")
-    dont_minimize := flag.Bool("nomin", false, "don't generate Kraken data structure")
-    writeJSON := flag.Bool("json", false, "write writeJSON representation of class tree to <genomeName>.classtree.json")
+    noKraken := flag.Bool("no_kraken", false, "don't generate Kraken data structure")
+    dontWriteMins := flag.Bool("no_write_kraken", false, "don't write the Kraken data to file")
+    writeJSON := flag.Bool("json", false, "write JSON representation of class tree to <genomeName>.classtree.json")
     k_arg := flag.Uint("k", 31, "kmer length")
     m_arg := flag.Uint("m", 15, "minimizer length")
     flag.Parse()
@@ -46,19 +47,21 @@ func main() {
         fmt.Println()
     }
 
-    var minimize bool
-    if *dont_minimize {
-        minimize = false
+    genKraken := !(*noKraken)
+    writeKraken := genKraken && *dontWriteMins
+    if !genKraken {
         fmt.Println("Kraken data structure disabled")
         fmt.Println()
-    } else {
-        minimize = true
+    } else if !writeKraken {
+        fmt.Println("Writing Kraken data to file disabled")
+        fmt.Println()
     }
 
-    if *writeJSON && minimize {
+
+    if *writeJSON && genKraken {
         fmt.Println("class tree writeJSON write enabled")
         fmt.Println()
-    } else if *writeJSON && !minimize {
+    } else if *writeJSON && !genKraken {
         fmt.Println("class tree writeJSON write enabled")
         fmt.Println("WARNING: you are writing the class tree writeJSON without minimizing - all node sizes will be 0")
         fmt.Println()
@@ -75,7 +78,7 @@ func main() {
         fmt.Println()
     }
 
-    parseFlags := repeatgenome.ParseFlags{*debug, *cpuProfile, *memProfile, minimize, *writeJSON}
+    parseFlags := repeatgenome.ParseFlags{*debug, *cpuProfile, *memProfile, genKraken, writeKraken, *writeJSON}
     repeatGenome := repeatgenome.Generate(genomeName, k, m, parseFlags)
     fmt.Println(repeatGenome.Name, "successfully generated - exiting")
 }

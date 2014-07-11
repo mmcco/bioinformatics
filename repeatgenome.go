@@ -64,11 +64,12 @@ import (
 )
 
 type ParseFlags struct {
-    Debug      bool
-    CPUProfile bool
-    MemProfile bool
-    Minimize   bool
-    WriteJSON  bool
+    Debug       bool
+    CPUProfile  bool
+    MemProfile  bool
+    Minimize    bool
+    WriteKraken bool
+    WriteJSON   bool
 }
 
 // Match.SW_Score - Smith-Waterman score, describing the likeness to the repeat reference sequence
@@ -432,7 +433,7 @@ func Generate(genomeName string, k, m uint8, parseFlags ParseFlags) *RepeatGenom
 
     if repeatGenome.ParseFlags.Minimize {
         // calling the parallel minimizer and writing the result
-        repeatGenome.GetKrakenSlice(true)
+        repeatGenome.getKrakenSlice()
     }
 
     if repeatGenome.ParseFlags.WriteJSON {
@@ -471,7 +472,7 @@ func Generate(genomeName string, k, m uint8, parseFlags ParseFlags) *RepeatGenom
         printSeqInt(thisMin, 15)
         fmt.Println()
 
-        fmt.Println("Kmer struct size: %d\n", unsafe.Sizeof(Kmer{}))
+        fmt.Printf("Kmer struct size: %d\n", unsafe.Sizeof(Kmer{}))
     }
 
     return repeatGenome
@@ -985,7 +986,7 @@ func (repeatGenome *RepeatGenome) minimizeThread(minCache *MinCache, matchStart,
     }
 }
 
-func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
+func (repeatGenome *RepeatGenome) getKrakenSlice() {
     // a rudimentary way of deciding how many threads to allow, should eventually be improved
     numCPU := runtime.NumCPU()
     if repeatGenome.ParseFlags.Debug {
@@ -1045,7 +1046,7 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
 
     fmt.Println("all minimizers generated")
     if len(kmerMap) != len(minCache.Cache) {
-        panic("RepeatGenome.GetKrakenSlice(): lengths of kmerMap and minCache.Cache are inconsistent")
+        panic("RepeatGenome.getKrakenSlice(): lengths of kmerMap and minCache.Cache are inconsistent")
     }
     fmt.Println(len(kmerMap), "unique kmers generated")
 
@@ -1069,7 +1070,7 @@ func (repeatGenome *RepeatGenome) GetKrakenSlice(writeMins bool) {
     minCache = nil
     runtime.GC()
 
-    if writeMins {
+    if repeatGenome.ParseFlags.WriteKraken {
         err = repeatGenome.WriteMins(minMap)
         checkError(err)
     }
