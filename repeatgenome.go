@@ -112,7 +112,7 @@ type RepeatGenome struct {
     ParseFlags ParseFlags
     // maps a chromosome name to a map of its sequences
     // as discussed above, though, matches only contain 1D sequence indexes
-    Chroms       map[string](map[string]string)
+    chroms       map[string](map[string]string)
     K            uint8
     M            uint8
     Kmers        []Kmer
@@ -423,7 +423,7 @@ func Generate(genomeName string, k, m uint8, parseFlags ParseFlags) *RepeatGenom
     repeatGenome := new(RepeatGenome)
     repeatGenome.Name = genomeName
     repeatGenome.ParseFlags = parseFlags
-    repeatGenome.Chroms = parseGenome(genomeName)
+    repeatGenome.chroms = parseGenome(genomeName)
     repeatGenome.Matches = parseMatches(genomeName)
     repeatGenome.getRepeats()
     repeatGenome.getClassTree()
@@ -442,7 +442,7 @@ func Generate(genomeName string, k, m uint8, parseFlags ParseFlags) *RepeatGenom
     if repeatGenome.ParseFlags.Debug {
 
         fmt.Println()
-        for k, v := range repeatGenome.Chroms {
+        for k, v := range repeatGenome.chroms {
             for k_, v_ := range v {
                 fmt.Printf("chrom: %s\tseq: %s\t%s...%s\n", k, k_, v_[:20], v_[len(v_)-20:])
             }
@@ -450,8 +450,10 @@ func Generate(genomeName string, k, m uint8, parseFlags ParseFlags) *RepeatGenom
         fmt.Println()
 
         fmt.Println()
-        fmt.Println("number of chromosomes parsed:", len(repeatGenome.Chroms))
+        fmt.Println("number of chromosomes parsed:", len(repeatGenome.chroms))
         fmt.Println()
+
+        fmt.Println("total number of bases in genome:", repeatGenome.size())
 
         repeatGenome.ClassTree.PrintBranches()
         fmt.Println()
@@ -785,10 +787,10 @@ func (repeats *Repeats) Write(filename string) {
 
 func (refGenome *RepeatGenome) PrintChromInfo() {
     fmt.Println()
-    for k, v := range refGenome.Chroms {
+    for k, v := range refGenome.chroms {
         for k_, v_ := range v {
-            fmt.Printf("refGenome.Chroms[%s][%s] = %s . . . %s\n", k, k_, v_[:10], v_[len(v_)-10:])
-            fmt.Printf("len(refGenome.Chroms[%s][%s]) = %d\n", k, k_, len(v_))
+            fmt.Printf("refGenome.chroms[%s][%s] = %s . . . %s\n", k, k_, v_[:10], v_[len(v_)-10:])
+            fmt.Printf("len(refGenome.chroms[%s][%s]) = %d\n", k, k_, len(v_))
         }
         fmt.Println()
     }
@@ -924,7 +926,7 @@ func (repeatGenome *RepeatGenome) minimizeThread(minCache *MinCache, matchStart,
 
     for i := matchStart; i < matchEnd; i++ {
         match = &repeatGenome.Matches[i]
-        seq = repeatGenome.Chroms[match.SeqName][match.SeqName]
+        seq = repeatGenome.chroms[match.SeqName][match.SeqName]
         seqLen = match.SeqEnd - match.SeqStart
         // for now, we will ignore matches too short to be traditionally minimized
         if seqLen < k_ {
@@ -950,7 +952,7 @@ func (repeatGenome *RepeatGenome) minimizeThread(minCache *MinCache, matchStart,
             minCache.Unlock()
             if exists {
                 c <- ThreadResponse{kmerInt, match.ClassNode}
-            } else if j == match.SeqStart || uint64(currOffset) < j {
+            } else if uint64(currOffset) < j || j == match.SeqStart {
                 currOffset, currMin = getMinimizer(kmerInt, k, m)
                 minCache.Lock()
                 minCache.Cache[kmerInt] = currMin
@@ -1108,7 +1110,7 @@ func (repeatGenome *RepeatGenome) numKmers() uint64 {
 
     for i := range repeatGenome.Matches {
         match = &repeatGenome.Matches[i]
-        seq = repeatGenome.Chroms[match.SeqName][match.SeqName][match.SeqStart:match.SeqEnd]
+        seq = repeatGenome.chroms[match.SeqName][match.SeqName][match.SeqStart:match.SeqEnd]
         seqs = strings.FieldsFunc(seq, splitOnN)
         for j := range seqs {
             if len(seqs[j]) >= k {
