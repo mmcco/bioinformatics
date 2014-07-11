@@ -54,6 +54,7 @@ import (
     "io"
     "io/ioutil"
     "log"
+    //"mapset"
     "os"
     "runtime"
     "runtime/pprof"
@@ -86,7 +87,7 @@ type ParseFlags struct {
 // Match.RepeatStart-  the starting index in the repeat consensus sequence
 // Match.RepeatEnd -  the ending sequence (exclusive) in the repeat consensus sequence
 // Match.RepeatRemains
-// Match.RepeatID - a numerical ID for the repeat type (starts at 1)
+// Match.InsertionID - a numerical ID for the repeat type (starts at 1)
 //     Match.Fullname - not in parsed data file - simply repeatClass concatenated - used for map indexing
 type Match struct {
     SW_Score    int32
@@ -103,10 +104,12 @@ type Match struct {
     RepeatStart   int64
     RepeatEnd     int64
     RepeatRemains int64
-    RepeatID      uint32
+    InsertionID   uint64
 
-    FullName  string
-    ClassNode *ClassNode
+    // these are generated, not parsed
+    RepeatName string
+    ClassNode  *ClassNode
+    Repeat     *Repeat
 }
 
 type RepeatGenome struct {
@@ -123,7 +126,7 @@ type RepeatGenome struct {
     Matches      Matches
     ClassTree    ClassTree
     Repeats      Repeats
-    RepeatMap    map[string]uint32
+    RepeatMap    map[string]uint64
 }
 
 type ClassTree struct {
@@ -150,15 +153,16 @@ type Seq struct {
 }
 
 type Repeat struct {
-    // assigned by RepeatMasker, in simple incremented order starting from 1
+    // assigned in simple incremented order starting from 1
     // they are therefore not compatible across genomes
     // we give root ID = 0
-    ID uint32
+    ID uint64
     // a list containing the repeat's ancestry path, from top down
     // root is implicit, and is therefore excluded from the list
     ClassList []string
     ClassNode *ClassNode
-    FullName  string
+    Name  string
+    NumInstances uint64
 }
 
 type ClassNode struct {
@@ -283,22 +287,7 @@ func parseMatches(genomeName string) Matches {
     matchLines = matchLines[3:]
 
     var matches Matches
-    var sw_Score, repeatID int64
-    repeatMap := make(map[uint32]string)
-
-    var maxRepeatID uint32 = 1
-    for i := range matchLines {
-        matchLine := string(matchLines[i])
-        rawVals := strings.Fields(matchLine)
-        if len(rawVals) < 15 {
-            fmt.Printf("FATAL ERROR: match line supplied to parseMatches() less than 15 fields long (has %d fields and length %d):\n", len(rawVals), len(matchLine))
-            log.Fatal(matchLine)
-        }
-        repeatID, err := strconv.ParseUint(strings.TrimSpace(rawVals[14]), 10, 32)
-        checkError(err)
-        maxRepeatID = maxU32(maxRepeatID, uint32(repeatID))
-    }
-    var customRepeatID uint32 = maxRepeatID + 1
+    var sw_Score int64
 
     for i := range matchLines {
         matchLine := string(matchLines[i])
@@ -345,9 +334,8 @@ func parseMatches(genomeName string) Matches {
         checkError(err)
         match.RepeatRemains, err = strconv.ParseInt(rawVals[13], 10, 64)
         checkError(err)
-        repeatID, err = strconv.ParseInt(rawVals[14], 10, 32)
+        match.InsertionID, err = strconv.ParseUint(rawVals[14], 10, 64)
         checkError(err)
-        match.RepeatID = uint32(repeatID)
 
         // necessary swaps to convert reverse complement repeat indexes to positive-strand indexes
         if match.IsRevComp {
@@ -366,12 +354,7 @@ func parseMatches(genomeName string) Matches {
             match.RepeatClass = match.RepeatClass[1:]
         }
 
-        match.FullName = strings.Join(match.RepeatClass, "/")
-
-        if repeatMap[match.RepeatID] != match.FullName {
-            match.RepeatID = customRepeatID
-            customRepeatID++
-        }
+        match.RepeatName = strings.Join(match.RepeatClass, "/")
 
         matches = append(matches, match)
     }
@@ -491,23 +474,28 @@ func (repeatGenome *RepeatGenome) getRepeats() {
     // we now populate a list of unique repeat types
     // repeats are stored in the below slice, indexed by their ID
     // we first determine the necessary size of the slice - we can't use append because matches are not sorted by repeatID
-    var repeatsSize uint32 = 1
-    for i := range repeatGenome.Matches {
-        repeatsSize = maxU32(repeatsSize, repeatGenome.Matches[i].RepeatID+1)
-    }
-    repeatGenome.Repeats = make(Repeats, repeatsSize)
+    repeatGenome.Repeats = Repeats{}
 
     // maps a repeat's category to its ID
-    repeatGenome.RepeatMap = make(map[string](uint32))
-    // we now assign the actual repeats
-    for i := range repeatGenome.Matches {
-        id := repeatGenome.Matches[i].RepeatID
+    repeatGenome.RepeatMap = make(map[string]uint64)
+
+    for _, match := range repeatGenome.Matches {
         // don't bother overwriting
-        if repeatGenome.Repeats[id].ID == 0 {
-            repeatGenome.Repeats[id].ID = id
-            repeatGenome.Repeats[id].ClassList = repeatGenome.Matches[i].RepeatClass
-            repeatGenome.Repeats[id].FullName = repeatGenome.Matches[i].FullName
-            repeatGenome.RepeatMap[repeatGenome.Repeats[id].FullName] = id
+        repeatID, exists := repeatGenome.RepeatMap[match.RepeatName]
+        if exists {
+            repeatGenome.Repeats[repeatID].NumInstances++
+            match.Repeat = &repeatGenome.Repeats[repeatID]
+        } else {
+            repeat := Repeat{}
+            repeat.ID = uint64(len(repeatGenome.Repeats))
+            repeat.ClassList = match.RepeatClass
+            repeat.Name = match.RepeatName
+            repeat.NumInstances = 1
+
+            repeatGenome.Repeats = append(repeatGenome.Repeats, repeat)
+            repeatGenome.RepeatMap[repeat.Name] = repeat.ID
+
+            match.Repeat = &repeat
         }
     }
 }
@@ -681,52 +669,58 @@ func (repeatGenome *RepeatGenome) getClassTree() {
     tree.Root = &ClassNode{"root", 0, []string{"root"}, nil, nil, true}
     tree.ClassNodes["root"] = tree.Root
     tree.NodesByID = append(tree.NodesByID, tree.Root)
-    var nextID uint16 = 1
-    for i := 1; i < len(repeatGenome.Repeats); i++ {
-        // ignore the null indices
-        if repeatGenome.Repeats[i].ID != 0 {
-            // process every heirarchy level (e.g. for "DNA/LINE/TiGGER", process "DNA", then "DNA/LINE", then "DNA/LINE/TiGGER")
-            for j := 1; j <= len(repeatGenome.Repeats[i].ClassList); j++ {
-                thisClass := repeatGenome.Repeats[i].ClassList[:j]
-                thisClassName := strings.Join(thisClass, "/")
-                _, keyExists := tree.ClassNodes[thisClassName]
-                if !keyExists {
-                    thisClassNode := new(ClassNode)
-                    thisClassNode.Name = thisClassName
-                    if nextID > 65535 {
-                        panic("RepeatGenome.getClassTree(): more than 65,536 class nodes - ID is overflowed")
-                    }
-                    thisClassNode.ID = nextID
-                    nextID++
-                    thisClassNode.Class = thisClass
-                    thisClassNode.IsRoot = false
-                    tree.ClassNodes[thisClassName] = thisClassNode
-                    tree.NodesByID = append(tree.NodesByID, thisClassNode)
-                    // first case handles primary classes, as root is implicit and not listed in thisClass
-                    if j == 1 {
-                        tree.ClassNodes[thisClassName].Parent = tree.Root
-                    } else {
-                        tree.ClassNodes[thisClassName].Parent = tree.ClassNodes[strings.Join(thisClass[:len(thisClass)-1], "/")]
-                    }
-                    parent := tree.ClassNodes[thisClassName].Parent
-                    if parent.Children == nil {
-                        parent.Children = make([]*ClassNode, 0)
-                    }
-                    parent.Children = append(parent.Children, tree.ClassNodes[thisClassName])
+
+    for _, repeat := range repeatGenome.Repeats {
+        // process every heirarchy level (e.g. for "DNA/LINE/TiGGER", process "DNA", then "DNA/LINE", then "DNA/LINE/TiGGER")
+        for j := 1; j <= len(repeat.ClassList); j++ {
+            thisClass := repeat.ClassList[:j]
+            thisClassName := strings.Join(thisClass, "/")
+            _, keyExists := tree.ClassNodes[thisClassName]
+            if !keyExists {
+                if len(tree.NodesByID) > 65534 {
+                    panic("RepeatGenome.getClassTree(): more than 65,536 class nodes - ID is overflowed")
                 }
+                classNode := new(ClassNode)
+                classNode.Name = thisClassName
+                classNode.ID = uint16(len(tree.NodesByID))
+                classNode.Class = thisClass
+                classNode.IsRoot = false
+
+                tree.ClassNodes[thisClassName] = classNode
+                tree.NodesByID = append(tree.NodesByID, classNode)
+                // first case handles primary classes, as root is implicit and not listed in thisClass
+                if j == 1 {
+                    classNode.Parent = tree.Root
+                } else {
+                    classNode.Parent = tree.ClassNodes[strings.Join(thisClass[:len(thisClass)-1], "/")]
+                }
+                if classNode.Parent.Children == nil {
+                    classNode.Parent.Children = make([]*ClassNode, 0)
+                }
+                classNode.Parent.Children = append(classNode.Parent.Children, tree.ClassNodes[thisClassName])
             }
         }
     }
 
-    for i := range repeatGenome.Repeats {
-        repeatGenome.Repeats[i].ClassNode = tree.ClassNodes[repeatGenome.Repeats[i].FullName]
+    // MUST NOT USE RANGE - the struct will be copied!
+    for i := 0; i < len(repeatGenome.Repeats); i++ {
+        repeat := &repeatGenome.Repeats[i]
+        repeat.ClassNode = tree.ClassNodes[repeat.Name]
+
+        if repeat.ClassNode == nil {
+            fmt.Println(repeat.Name)
+            log.Fatal("getClassTree(): nil Repeat.ClassNode")
+        }
     }
 
-    for i := range repeatGenome.Matches {
-        repeatGenome.Matches[i].ClassNode = tree.ClassNodes[repeatGenome.Matches[i].FullName]
-        if repeatGenome.Matches[i].ClassNode == nil {
-            fmt.Println(repeatGenome.Matches[i].FullName)
-            log.Fatal("nil match ClassNode")
+    // MUST NOT USE RANGE - the struct will be copied!
+    for i := 0; i < len(repeatGenome.Matches); i++ {
+        match := &repeatGenome.Matches[i]
+        match.ClassNode = tree.ClassNodes[match.RepeatName]
+
+        if match.ClassNode == nil {
+            fmt.Println(match.RepeatName)
+            log.Fatal("getClassTree(): nil Match.ClassNode")
         }
     }
 }
@@ -788,7 +782,7 @@ func (repeats *Repeats) Write(filename string) {
 
     for i := range *repeats {
         if int((*repeats)[i].ID) == i {
-            fmt.Fprintf(outfile, "%d %s\n", (*repeats)[i].ID, (*repeats)[i].FullName)
+            fmt.Fprintf(outfile, "%d %s\n", (*repeats)[i].ID, (*repeats)[i].Name)
         }
     }
 }
@@ -954,6 +948,10 @@ func (repeatGenome *RepeatGenome) minimizeThread(matchStart, matchEnd uint64, c 
 
             kmerInt = seqToInt(seq[j : j+k_])
             _, thisMin = getMinimizer(kmerInt, k, m)
+            if match.ClassNode == nil {
+                fmt.Println("current match's repeat:", match.RepeatName)
+                panic("minimizeThread(): match has nil ClassNode")
+            }
             c <- ThreadResponse{kmerInt, thisMin, match.ClassNode}
         }
     }
@@ -1001,10 +999,6 @@ func (repeatGenome *RepeatGenome) getKrakenSlice() {
 
         kmerInt, minimizer, relative = response.KmerInt, response.Minimizer, response.Relative
         minCache[kmerInt] = minimizer
-
-        if relative == nil {
-            panic("nil relative returned by thread")
-        }
 
         kmer, exists = kmerMap[kmerInt]
         if exists {

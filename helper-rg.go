@@ -69,7 +69,12 @@ func fileLines(filepath string) (err error, linesBytes [][]byte) {
 
 /*
 func readSimSeqReads(filepath string) (err error, numReads uint64, simReads []Seq) {
-    err, 
+    err, lines = fileLines(filepath)
+    checkError(err)
+
+    for _, line := range filelines {
+        simReads = append(simReads, getSeq(line))
+    }
 }
 */
 
