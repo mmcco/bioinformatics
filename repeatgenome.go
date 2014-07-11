@@ -15,6 +15,8 @@ package repeatgenome
 
    For portability's sake, the flags should be used as args to Generate() rather than globals.
 
+   Minimizers could be stored as uint32's.
+
    We should test a version that doesn't cache minimizers, as that seems to be a needless bottleneck. It could also be conditional on the number of CPUs available.
 
    Minimizers are currently not written in any order. This is for memory efficiency, and can be changed in the future.
@@ -176,8 +178,14 @@ type Matches []Match
 
 //type Chroms map[string](map[string][]byte)
 
+type MinPair struct {
+    KmerInt   Kmer
+    Minimizer uint64
+}
+
 type ThreadResponse struct {
-    KmerInt  uint64
+    KmerInt   uint64
+    Minimizer uint64
     Relative *ClassNode
 }
 
@@ -911,71 +919,42 @@ func fillSeq(slice []byte, seqInt uint64) {
 
 // some of the logic in here is deeply nested or non-obvious for efficiency's sake
 // specifically, we made sure not to make any heap allocations, which means reverse complements can never be explicitly evaluated
-func (repeatGenome *RepeatGenome) minimizeThread(minCache *MinCache, matchStart, matchEnd uint64, c chan ThreadResponse) {
+func (repeatGenome *RepeatGenome) minimizeThread(matchStart, matchEnd uint64, c chan ThreadResponse) {
     var match *Match
-    var seqLen uint64
     k := repeatGenome.K
     k_ := uint64(k)
     m := repeatGenome.M
     //m_ := uint64(m)
-    var currOffset uint8
-    var seq, kmerSeq string
-    var kmerInt, possMin, currMin uint64
-    var x int
-    var exists bool
+    var seq string
+    var x, matchLen, kmerInt, thisMin uint64
 
     for i := matchStart; i < matchEnd; i++ {
         match = &repeatGenome.Matches[i]
         seq = repeatGenome.chroms[match.SeqName][match.SeqName]
-        seqLen = match.SeqEnd - match.SeqStart
+        matchLen = match.SeqEnd - match.SeqStart
         // for now, we will ignore matches too short to be traditionally minimized
-        if seqLen < k_ {
+        if matchLen < k_ {
             continue
         }
 
     KmerLoop:
         for j := match.SeqStart; j <= match.SeqEnd-k_; j++ {
-            kmerSeq = seq[j : j+k_]
             // we begin by skipping any kmers containing n's
             // we start checking from the end for maximum skipping efficiency
-            for x = int(k) - 1; x >= 0; x-- {
-                if kmerSeq[x] == byte('n') {
-                    j += uint64(x)
-                    // effectively clears the minimizer cache
-                    currOffset = 0
+            for x = j + k_ - 1; x >= j; x-- {
+                if seq[x] == byte('n') {
+                    j += x
                     continue KmerLoop
                 }
-            }
-            kmerInt = minU64(seqToInt(kmerSeq), revCompToInt(kmerSeq))
-            minCache.Lock()
-            _, exists = minCache.Cache[kmerInt]
-            minCache.Unlock()
-            if exists {
-                c <- ThreadResponse{kmerInt, match.ClassNode}
-            } else if uint64(currOffset) < j || j == match.SeqStart {
-                currOffset, currMin = getMinimizer(kmerInt, k, m)
-                minCache.Lock()
-                minCache.Cache[kmerInt] = currMin
-                minCache.Unlock()
-
-                c <- ThreadResponse{kmerInt, match.ClassNode}
-            } else {
-                possMin = seqToInt(kmerSeq[k-m:])
-                if possMin < currMin {
-                    currMin = possMin
-                    currOffset = k - m
+                // prevents negative overflow - a bit of a hack, but seqs can be big, so we need uint64's capacity
+                if x == 0 {
+                    break
                 }
-                possMin = revCompToInt(kmerSeq[k-m:])
-                if possMin < currMin {
-                    currMin = possMin
-                    currOffset = k - m
-                }
-                minCache.Lock()
-                minCache.Cache[kmerInt] = currMin
-                minCache.Unlock()
-
-                c <- ThreadResponse{kmerInt, match.ClassNode}
             }
+
+            kmerInt = seqToInt(seq[j : j+k_])
+            _, thisMin = getMinimizer(kmerInt, k, m)
+            c <- ThreadResponse{kmerInt, thisMin, match.ClassNode}
         }
     }
 
@@ -990,10 +969,6 @@ func (repeatGenome *RepeatGenome) getKrakenSlice() {
     }
     runtime.GOMAXPROCS(numCPU)
     var mStart, mEnd uint64
-    // used so that we don't have to go searching through lists each time
-    kmerMap := make(map[uint64]*Kmer)
-    minCache := new(MinCache)
-    minCache.Cache = make(map[uint64]uint64)
 
     numKmers := repeatGenome.numKmers()
     fmt.Printf("expecting >= %d million kmers\n", numKmers/1000000)
@@ -1004,17 +979,19 @@ func (repeatGenome *RepeatGenome) getKrakenSlice() {
         mEnd = uint64((i + 1) * len(repeatGenome.Matches) / numCPU)
         c := make(chan ThreadResponse, 1000)
         threadChans = append(threadChans, c)
-        go repeatGenome.minimizeThread(minCache, mStart, mEnd, c)
+        go repeatGenome.minimizeThread(mStart, mEnd, c)
     }
 
     // below is the atomic section of minimizing, which is parallel
     // this seems to be the rate-limiting section, as threads use only ~6-7 CPU-equivalents
     // it should therefore be optimized before other sections
     var kmer *Kmer
-    var kmersProcessed, kmerInt uint64
+    var kmersProcessed, kmerInt, minimizer uint64
     var lca_ID uint16
     var lca, relative *ClassNode
     var exists bool
+    minCache := make(map[uint64]uint64)
+    kmerMap := make(map[uint64]*Kmer)
 
     for response := range merge(threadChans) {
         if kmersProcessed%5000000 == 0 {
@@ -1022,7 +999,8 @@ func (repeatGenome *RepeatGenome) getKrakenSlice() {
         }
         kmersProcessed++
 
-        kmerInt, relative = response.KmerInt, response.Relative
+        kmerInt, minimizer, relative = response.KmerInt, response.Minimizer, response.Relative
+        minCache[kmerInt] = minimizer
 
         if relative == nil {
             panic("nil relative returned by thread")
@@ -1034,37 +1012,33 @@ func (repeatGenome *RepeatGenome) getKrakenSlice() {
             lca = repeatGenome.ClassTree.getLCA(repeatGenome.ClassTree.NodesByID[lca_ID], relative)
             *(*uint16)(unsafe.Pointer(&kmer[8])) = lca.ID
         } else {
-            kmer := Kmer{}
+            kmer = new(Kmer)
             *(*uint64)(unsafe.Pointer(&kmer[0])) = kmerInt
             *(*uint16)(unsafe.Pointer(&kmer[8])) = relative.ID
-            kmerMap[kmerInt] = &kmer
+            kmerMap[kmerInt] = kmer
         }
     }
 
     fmt.Println("all minimizers generated")
-    if len(kmerMap) != len(minCache.Cache) {
-        panic("RepeatGenome.getKrakenSlice(): lengths of kmerMap and minCache.Cache are inconsistent")
-    }
     fmt.Println(len(kmerMap), "unique kmers generated")
 
     var kmers Kmers
     var thisMin uint64
     minMap := make(map[uint64]Kmers)
 
-    for kmerInt, minimizer := range minCache.Cache {
+    for kmerInt, kmer := range kmerMap {
+        minimizer = minCache[kmerInt]
         kmers, exists = minMap[minimizer]
         if exists {
-            minMap[minimizer] = append(kmers, kmerMap[kmerInt])
+            minMap[minimizer] = append(kmers, kmer)
         } else {
-            minMap[minimizer] = Kmers{kmerMap[kmerInt]}
+            minMap[minimizer] = Kmers{kmer}
         }
-        delete(minCache.Cache, kmerInt)
         delete(kmerMap, kmerInt)
     }
 
     // manual deletion to save memory
     kmerMap = nil
-    minCache = nil
     runtime.GC()
 
     if repeatGenome.ParseFlags.WriteKraken {
