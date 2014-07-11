@@ -26,6 +26,19 @@ with open(genomeName + ".mins", "r") as f:
 with open(genomeName + ".lcafreq", "w") as out:
     out.writelines([lca + ' ' + str(count) + '\n' for lca, count in lcaFreq.iteritems()])
 
+with open(genomeName + ".depthfreq", "w") as out:
+    depthFreq = defaultdict(int)
+    for lca, count in lcaFreq.iteritems():
+        class_ = filter(lambda x: x != "Unknown" and x != "Other", lca.split("/"))
+        # increment to account for root
+        if class_[0] == "root":
+            depth = 0
+        else:
+            depth = len(class_)
+        depthFreq[depth] += 1
+
+    out.writelines([str(depth) + ' ' + str(count) + '\n' for depth, count in depthFreq.iteritems()])
+
 with open(genomeName + ".minfreq", "w") as out:
     minCounts = defaultdict(int)
     for count in minFreq.values():

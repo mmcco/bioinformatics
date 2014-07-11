@@ -1,6 +1,6 @@
 set terminal svg
 set output 'match-size-histogram.svg'
-set title "Drosophila melanogaster Repeat Match Length Distribution" 
+set title "dm3 Repeat Match Length Distribution" 
 set logscale
 set style fill solid
 set xlabel "Repeat size (bp)"
