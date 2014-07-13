@@ -408,6 +408,17 @@ func parseGenome(genomeName string) map[string](map[string]string) {
     return chroms
 }
 
+func (repeatGenome *RepeatGenome) Size() uint64 {
+    var size uint64 = 0
+
+    for _, seqs := range repeatGenome.chroms {
+        for _, seq := range seqs {
+            size += uint64(len(seq))
+        }
+    }
+    return size
+}
+
 func Generate(genomeName string, k, m uint8, parseFlags ParseFlags) *RepeatGenome {
     // we popoulate the RepeatGenome mostly with helper functions
     // we should consider whether it makes more sense for them to alter the object directly, than to return their results
@@ -444,7 +455,7 @@ func Generate(genomeName string, k, m uint8, parseFlags ParseFlags) *RepeatGenom
         fmt.Println("number of chromosomes parsed:", len(repeatGenome.chroms))
         fmt.Println()
 
-        fmt.Println("total number of bases in genome:", repeatGenome.size())
+        fmt.Println("total number of bases in genome:", repeatGenome.Size())
 
         repeatGenome.ClassTree.PrintBranches()
         fmt.Println()
