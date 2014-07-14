@@ -29,7 +29,8 @@ func main() {
     if *cpuProfile {
         fmt.Println("CPU profiler enabled")
         fmt.Println()
-        f, err := os.Create(genomeName + ".cpuprof")
+        os.Mkdir("profiles", os.ModeDir)
+        f, err := os.Create("profiles/" + genomeName + ".cpuprof")
         if err != nil {
             panic(err)
         }
