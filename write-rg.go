@@ -77,18 +77,6 @@ func (jsonNode *JSONNode) deleteLeaves() {
     jsonNode.Children = branchChildren
 }
 
-func (repeats *Repeats) Write(filename string) {
-    outfile, err := os.Create(filename)
-    checkError(err)
-    defer outfile.Close()
-
-    for i := range *repeats {
-        if int((*repeats)[i].ID) == i {
-            fmt.Fprintf(outfile, "%d %s\n", (*repeats)[i].ID, (*repeats)[i].Name)
-        }
-    }
-}
-
 func (refGenome *RepeatGenome) PrintChromInfo() {
     fmt.Println()
     for k, v := range refGenome.chroms {
@@ -209,6 +197,50 @@ func fillSeq(slice []byte, seqInt uint64) {
             break
         default:
             panic("error in printSeqInt() base selection")
+        }
+    }
+}
+
+func (repeats *Repeats) Write(filename string) {
+    outfile, err := os.Create(filename)
+    checkError(err)
+    defer outfile.Close()
+
+    for i := range *repeats {
+        if int((*repeats)[i].ID) == i {
+            fmt.Fprintf(outfile, "%d %s\n", (*repeats)[i].ID, (*repeats)[i].Name)
+        }
+    }
+}
+
+func (repeat *Repeat) Print() {
+    for j := range repeat.ClassList {
+        for j_ := 0; j_ < j; j_++ {
+            fmt.Printf("\t")
+        }
+        fmt.Printf("%s\n", repeat.ClassList[j])
+    }
+    fmt.Println()
+}
+
+func (classTree *ClassTree) PrintTree() {
+    classTree.Root.printTreeRec(0, true)
+}
+
+// doesn't print leaves
+// prevents the terminal from being flooded with Unknowns, Others, and Simple Repeats
+func (classTree *ClassTree) PrintBranches() {
+    classTree.Root.printTreeRec(0, false)
+}
+
+func (classNode *ClassNode) printTreeRec(indent int, printLeaves bool) {
+    for i := 0; i < indent; i++ {
+        fmt.Printf("\t")
+    }
+    fmt.Println(classNode.Class[len(classNode.Class)-1])
+    for i := range classNode.Children {
+        if printLeaves || len(classNode.Children[i].Children) > 0 {
+            classNode.Children[i].printTreeRec(indent+1, printLeaves)
         }
     }
 }
