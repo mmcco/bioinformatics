@@ -244,3 +244,59 @@ func (classNode *ClassNode) printTreeRec(indent int, printLeaves bool) {
         }
     }
 }
+
+func (seq *Seq) Print() {
+    var numBases uint64 = uint64(len(seq.Bases))
+    basesInFirstByte := 1 + ((seq.Len - 1) % numBases)
+    var byteCopy byte = seq.Bases[0]
+    // we start by truncating the extra bits from the first byte and printing the rest
+    byteCopy <<= (4 - basesInFirstByte) * 2
+    var i uint64
+
+    for i = 0; i < basesInFirstByte; i++ {
+        // \xc0 is 11000000 in binary - it selects the first base
+        switch byteCopy & byte('\xc0') {
+        case 0:
+            fmt.Print("a")
+            break
+        case byte('\x40'):
+            fmt.Print("c")
+            break
+        case byte('\x80'):
+            fmt.Print("g")
+            break
+        case byte('\xc0'):
+            fmt.Print("t")
+            break
+        default:
+            panic("Seq.Print(): bad value in switch")
+        }
+        byteCopy <<= 2
+    }
+
+    // we then print the bases in the rest of the bytes
+    for i := 1; i < len(seq.Bases); i++ {
+        byteCopy = seq.Bases[i]
+
+        for j := 0; j < 4; j++ {
+            switch byteCopy & byte('\xc0') {
+            case 0:
+                fmt.Print("a")
+                break
+            case byte('\x40'):
+                fmt.Print("c")
+                break
+            case byte('\x80'):
+                fmt.Print("g")
+                break
+            case byte('\xc0'):
+                fmt.Print("t")
+                break
+            default:
+                panic("Seq.Print(): bad value in switch")
+            }
+
+            byteCopy <<= 2
+        }
+    }
+}

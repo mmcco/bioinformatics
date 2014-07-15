@@ -1,5 +1,7 @@
 package repeatgenome
 
+import (
+)
 // General sequence-manipulation functions.
 
 func seqToInt(seq string) uint64 {
@@ -162,4 +164,61 @@ func seqLessThan(a, b string) bool {
         }
     }
     return false
+}
+
+func GetSeq(seqStr string) *Seq {
+    // ceiling division of len(seqStr) by 4
+    var numBytes uint64 = 1 + ((uint64(len(seqStr)) - 1) / 4)
+    seq := Seq{make([]byte, numBytes, numBytes), uint64(len(seqStr))}
+    basesInFirstByte := 1 + ((seq.Len - 1) % numBytes)
+
+    seqStrInd := 0
+    var i uint64
+    for i = 0; i < basesInFirstByte; i++ {
+        seq.Bases[0] <<= 2
+
+        switch seqStr[seqStrInd] {
+        case 'a':
+            break
+        case 'c':
+            seq.Bases[0] |= 1
+            break
+        case 'g':
+            seq.Bases[0] |= 2
+            break
+        case 't':
+            seq.Bases[0] |= 3
+            break
+        default:
+            panic("byte other than 'a', 'c', 'g', or 't' supplied to revComp")
+        }
+
+        seqStrInd++
+    }
+
+    for i := 1; i < len(seq.Bases); i++ {
+        for j := 0; j < 4; j++ {
+            seq.Bases[i] <<= 2
+
+            switch seqStr[seqStrInd] {
+            case 'a':
+                break
+            case 'c':
+                seq.Bases[i] |= 1
+                break
+            case 'g':
+                seq.Bases[i] |= 2
+                break
+            case 't':
+                seq.Bases[i] |= 3
+                break
+            default:
+                panic("byte other than 'a', 'c', 'g', or 't' supplied to revComp")
+            }
+
+            seqStrInd++
+        }
+    }
+
+    return &seq
 }

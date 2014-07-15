@@ -143,10 +143,12 @@ type ClassTree struct {
 // the last two are the LCA ID
 type Kmer [10]byte
 
-// can store a sequence of length <= 65,535
+// as with the Kmer type, each base is represented by two bits
+// any excess bits are the first bits of the first byte (seq is right-justified)
+// remember that len(Seq.Bases) is not the actual number of bases, but rather the number of bytes necessary to represent them
 type Seq struct {
-    Bases  []byte
-    Length uint16
+    Bases []byte
+    Len   uint64
 }
 
 type Repeat struct {
