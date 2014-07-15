@@ -67,17 +67,6 @@ func fileLines(filepath string) (err error, linesBytes [][]byte) {
     }
 }
 
-/*
-func readSimSeqReads(filepath string) (err error, numReads uint64, simReads []Seq) {
-    err, lines = fileLines(filepath)
-    checkError(err)
-
-    for _, line := range filelines {
-        simReads = append(simReads, getSeq(line))
-    }
-}
-*/
-
 func max(a int, b int) int {
     if a > b {
         return a

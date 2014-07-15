@@ -166,7 +166,7 @@ func seqLessThan(a, b string) bool {
     return false
 }
 
-func GetSeq(seqStr string) *Seq {
+func GetSeq(seqStr []byte) Seq {
     // ceiling division of len(seqStr) by 4
     var numBytes uint64 = 1 + ((uint64(len(seqStr)) - 1) / 4)
     seq := Seq{make([]byte, numBytes, numBytes), uint64(len(seqStr))}
@@ -220,5 +220,5 @@ func GetSeq(seqStr string) *Seq {
         }
     }
 
-    return &seq
+    return seq
 }

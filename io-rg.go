@@ -300,3 +300,13 @@ func (seq *Seq) Print() {
         }
     }
 }
+
+func readSimSeqReads(filepath string) (error, []Seq) {
+    err, lines := fileLines(filepath)
+
+    simReads := make([]Seq, 0, len(lines))
+    for _, line := range lines {
+        simReads = append(simReads, GetSeq(line))
+    }
+    return err, simReads
+}
