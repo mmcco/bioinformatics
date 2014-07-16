@@ -1,6 +1,7 @@
 package repeatgenome
 
 import (
+    "fmt"
 )
 // General sequence-manipulation functions.
 
@@ -24,7 +25,7 @@ func seqToInt(seq string) uint64 {
             seqInt |= 3
             break
         default:
-            panic("byte other than 'a', 'c', 'g', or 't' passed to seqToInt()")
+            panic(fmt.Sprintf("byte other than 'a', 'c', 'g', or 't' passed to seqToInt(): %c", seq[i]))
         }
     }
     return seqInt
@@ -50,7 +51,7 @@ func revCompToInt(seq string) uint64 {
         case 't':
             break
         default:
-            panic("byte other than 'a', 'c', 'g', or 't' passed to revCompToInt()")
+            panic(fmt.Sprintf("byte other than 'a', 'c', 'g', or 't' passed to revCompToInt(): %c", seq[i]))
         }
     }
     return seqInt

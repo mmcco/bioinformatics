@@ -27,8 +27,8 @@ func (repeatGenome *RepeatGenome) WriteClassJSON(useCumSize, printLeaves bool) {
 
     classToCount := make(map[uint16]uint64)
     for i := range repeatGenome.Kmers {
-        lca_ID := *(*uint16)(unsafe.Pointer(&repeatGenome.Kmers[i][8]))
-        classToCount[lca_ID]++
+        lcaID := *(*uint16)(unsafe.Pointer(&repeatGenome.Kmers[i][8]))
+        classToCount[lcaID]++
     }
 
     root := JSONNode{tree.Root.Name, classToCount[0], nil}
@@ -89,7 +89,7 @@ func (refGenome *RepeatGenome) PrintChromInfo() {
 }
 
 // a saner way of doing this would be to allocate a single k-long []byte and have a function populate it before printing
-func (repeatGenome *RepeatGenome) WriteMins(minMap map[uint64]Kmers) error {
+func (repeatGenome *RepeatGenome) WriteMins(minMap MinMap) error {
     k := repeatGenome.K
     m := repeatGenome.M
     kmerBuf := make([]byte, k, k)
@@ -103,12 +103,12 @@ func (repeatGenome *RepeatGenome) WriteMins(minMap map[uint64]Kmers) error {
     writer := bufio.NewWriter(outfile)
     defer writer.Flush()
 
-    var kmers Kmers
+    var kmers PKmers
     var thisMin, kmerSeqInt uint64
-    var lca_ID uint16
+    var lcaID uint16
 
     for thisMin, kmers = range minMap {
-        fillSeq(minBuf, thisMin)
+        fillKmerBuf(minBuf, thisMin)
         _, err = fmt.Fprintf(writer, ">%s\n", minBuf)
         if err != nil {
             return err
@@ -116,9 +116,9 @@ func (repeatGenome *RepeatGenome) WriteMins(minMap map[uint64]Kmers) error {
 
         for i := range kmers {
             kmerSeqInt = *(*uint64)(unsafe.Pointer(&kmers[i][0]))
-            lca_ID = *(*uint16)(unsafe.Pointer(&kmers[i][8]))
-            fillSeq(kmerBuf, kmerSeqInt)
-            _, err = fmt.Fprintf(writer, "\t%s %s\n", kmerBuf, repeatGenome.ClassTree.NodesByID[lca_ID].Name)
+            lcaID = *(*uint16)(unsafe.Pointer(&kmers[i][8]))
+            fillKmerBuf(kmerBuf, kmerSeqInt)
+            _, err = fmt.Fprintf(writer, "\t%s %s\n", kmerBuf, repeatGenome.ClassTree.NodesByID[lcaID].Name)
             if err != nil {
                 return err
             }
@@ -177,9 +177,11 @@ func writeSeqInt(writer io.ByteWriter, seqInt uint64, seqLen uint8) error {
     return nil
 }
 
-func fillSeq(slice []byte, seqInt uint64) {
+// assumes that all bytes in the slice to be filled are initialized
+// (a.k.a initialize buffer with make([]byte, k, k))
+func fillKmerBuf(slice []byte, seqInt uint64) {
     if len(slice) > 32 {
-        panic("slice of length greater than 32 passed to fillSeq()")
+        panic("slice of length greater than 32 passed to fillKmerBuf()")
     }
     for i := range slice {
         switch (seqInt >> uint((2 * (len(slice) - i - 1)))) & 3 {
@@ -301,10 +303,10 @@ func (seq *Seq) Print() {
     }
 }
 
-func readSimSeqReads(filepath string) (error, []Seq) {
+func readSimSeqReads(filepath string) (error, Seqs) {
     err, lines := fileLines(filepath)
 
-    simReads := make([]Seq, 0, len(lines))
+    simReads := make(Seqs, 0, len(lines))
     for _, line := range lines {
         simReads = append(simReads, GetSeq(line))
     }

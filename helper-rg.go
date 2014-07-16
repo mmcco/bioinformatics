@@ -116,15 +116,15 @@ func minU64(a, b uint64) uint64 {
 }
 
 // needed for sort.Interface
-func (kmers Kmers) Len() int {
+func (kmers PKmers) Len() int {
     return len(kmers)
 }
 
-func (kmers Kmers) Swap(i, j int) {
+func (kmers PKmers) Swap(i, j int) {
     kmers[i], kmers[j] = kmers[j], kmers[i]
 }
 
-func (kmers Kmers) Less(i, j int) bool {
+func (kmers PKmers) Less(i, j int) bool {
     return bytes.Compare(kmers[i][:8], kmers[j][:8]) == -1
 }
 

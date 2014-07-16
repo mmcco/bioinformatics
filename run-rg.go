@@ -1,12 +1,40 @@
 package main
 
 import (
+    "bytes"
     "flag"
     "fmt"
+    "io/ioutil"
     "jh/repeatgenome"
     "os"
     "runtime/pprof"
 )
+
+func checkError(err error) {
+    if err != nil {
+        panic(err)
+    }
+}
+
+// returns the number of lines and a slice of the lines
+func lines(byteSlice []byte) [][]byte {
+    var lines [][]byte = bytes.Split(byteSlice, []byte{'\n'})
+    // drop the trailing newlines
+    newline := []byte("\n")
+    for lastLine := lines[len(lines)-1]; len(lines) > 0 && (len(lastLine) == 0 || bytes.Equal(lastLine, newline)); lastLine = lines[len(lines)-1] {
+        lines = lines[:len(lines)-1]
+    }
+    return lines
+}
+
+func fileLines(filepath string) (err error, linesBytes [][]byte) {
+    rawBytes, err := ioutil.ReadFile(filepath)
+    if err != nil {
+        return err, nil
+    } else {
+        return nil, lines(rawBytes)
+    }
+}
 
 func main() {
 
@@ -79,7 +107,39 @@ func main() {
         fmt.Println()
     }
 
-    parseFlags := repeatgenome.ParseFlags{*debug, *cpuProfile, *memProfile, genKraken, writeKraken, *writeJSON}
-    repeatGenome := repeatgenome.Generate(genomeName, k, m, parseFlags)
+    rgFlags := repeatgenome.Flags{*debug, *cpuProfile, *memProfile, genKraken, writeKraken, *writeJSON}
+    repeatGenome := repeatgenome.Generate(genomeName, k, m, rgFlags)
+
+    workingDirName, err := os.Getwd()
+    checkError(err)
+    readsDirName := workingDirName + "/" + genomeName + "-reads"
+    currDir, err := os.Open(readsDirName)
+    checkError(err)
+    fileinfos, err := currDir.Readdir(-1)
+    checkError(err)
+    processedFiles := []os.FileInfo{}
+    for _, fileinfo := range fileinfos {
+        if len(fileinfo.Name()) > 5 && fileinfo.Name()[len(fileinfo.Name())-5 : ] == ".proc" {
+            processedFiles = append(processedFiles, fileinfo)
+        }
+    }
+    readsBytes := [][]byte{}
+    for _, fileinfo := range processedFiles {
+        _, theseReadsBytes := fileLines(readsDirName + "/" + fileinfo.Name())
+        for _, bytesLine := range theseReadsBytes {
+            readsBytes = append(readsBytes, bytesLine)
+        }
+    }
+
+    readChan := make(chan string)
+
+    go func() {
+        for _, readBytes := range readsBytes {
+            readChan <- string(readBytes)
+        }
+        close(readChan)
+    }()
+
+    repeatGenome.ClassifyReads(readChan)
     fmt.Println(repeatGenome.Name, "successfully generated - exiting")
 }
