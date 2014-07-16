@@ -218,8 +218,7 @@ func parseMatches(genomeName string) Matches {
         matchLine := string(matchLines[i])
         rawVals := strings.Fields(matchLine)
         if len(rawVals) < 15 {
-            fmt.Printf("FATAL ERROR: match line supplied to parseMatches() less than 15 fields long (has %d fields and length %d):\n", len(rawVals), len(matchLine))
-            log.Fatal(matchLine)
+            panic(fmt.Sprintf("FATAL ERROR: match line supplied to parseMatches() less than 15 fields long (has %d fields and length %d):\n", len(rawVals), len(matchLine)))
         }
         var match Match
         match.IsRevComp = rawVals[8] == "C"
@@ -808,8 +807,7 @@ func (rg *RepeatGenome) kmerSeqFeed(seq string) chan uint64 {
 }
 
 func (rg *RepeatGenome) ClassifyReads(readChan chan string) {
-    t := 0
-    nils := 0
+    t, t2, nils := 0, 0, 0
     m := make(map[uint64]bool, len(rg.Kmers))
     for _, kmer := range rg.Kmers {
         kmerSeq := *(*uint64)(unsafe.Pointer(&kmer[0]))
@@ -822,6 +820,7 @@ ReadLoop:
     for readSeq := range readChan {
         t++
         for kmerSeq := range rg.kmerSeqFeed(readSeq) {
+            t2++
             _, minimizer := getMinimizer(kmerSeq, rg.K, rg.M)
             kmer := rg.getKmer(minimizer, kmerSeq)
             if kmer == nil && m[kmerSeq] {
@@ -830,10 +829,10 @@ ReadLoop:
             }
             if kmer != nil {
                 fillKmerBuf(byteBuf, kmerSeq)
-                fmt.Println("\tFOUND:", string(byteBuf))
                 lcaID := *(*uint16)(unsafe.Pointer(&kmer[8]))
-                fmt.Println(kmerSeq, rg.ClassTree.NodesByID[lcaID])
-
+                if lcaID == 25 {
+                    fmt.Println()
+                }
                 // only use the first matched kmer
                 continue ReadLoop
             } else {
