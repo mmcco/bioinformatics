@@ -117,7 +117,7 @@ type RepeatGenome struct {
     chroms       map[string](map[string]string)
     K            uint8
     M            uint8
-    Kmers        []Kmer
+    Kmers        Kmers
     // stores the offset of each minimizer's first kmer in RepeatGenome.Kmers
     OffsetsToMin map[uint64]uint64
     // stores the number of kmers that each minimizer is associated with
@@ -127,6 +127,7 @@ type RepeatGenome struct {
     ClassTree    ClassTree
     Repeats      Repeats
     RepeatMap    map[string]uint64
+    KmerIndex    map[uint64]uint64
 }
 
 type ClassTree struct {
@@ -330,17 +331,6 @@ func parseGenome(genomeName string) map[string](map[string]string) {
         }
     }
     return chroms
-}
-
-func (rg *RepeatGenome) Size() uint64 {
-    var size uint64 = 0
-
-    for _, seqs := range rg.chroms {
-        for _, seq := range seqs {
-            size += uint64(len(seq))
-        }
-    }
-    return size
 }
 
 func Generate(genomeName string, k, m uint8, rgFlags Flags) *RepeatGenome {
@@ -669,6 +659,9 @@ func (rg *RepeatGenome) getKrakenSlice() {
     rg.MinCounts = make(map[uint64]uint64, numUniqMins)
     rg.SortedMins = make(Uint64Slice, 0, numUniqMins)
     for thisMin, kmers := range minMap {
+        if len(kmers) == 0 {
+            panic("empty kmer list stored in minMap")
+        }
         rg.MinCounts[thisMin] += uint64(len(kmers))
         rg.SortedMins = append(rg.SortedMins, thisMin)
         sort.Sort(kmers)
@@ -687,14 +680,18 @@ func (rg *RepeatGenome) getKrakenSlice() {
     var currOffset uint64 = 0
     rg.OffsetsToMin = make(map[uint64]uint64)
     rg.Kmers = make(Kmers, 0, numUniqKmers)
+    rg.KmerIndex = make(map[uint64]uint64, numUniqKmers)       // temp - delete
     for _, thisMin := range rg.SortedMins {
         rg.OffsetsToMin[thisMin] = currOffset
         currOffset += uint64(len(minMap[thisMin]))
         for _, kmer := range minMap[thisMin] {
+            rg.KmerIndex[*(*uint64)(unsafe.Pointer(&kmer[0]))] = uint64(len(rg.Kmers))    // temp - delete
             rg.Kmers = append(rg.Kmers, *kmer)
         }
         delete(minMap, thisMin)
     }
+
+    fmt.Println("len(KmerIndex):", len(rg.KmerIndex))    // temp - delete
 
     if uint64(len(rg.Kmers)) != numUniqKmers {
         panic(fmt.Sprintf("error populating RepeatGenome.Kmers - %d kmers inserted rather than expected %d", len(rg.Kmers), numUniqKmers))
@@ -731,16 +728,38 @@ func (rg *RepeatGenome) numKmers() uint64 {
     return numKmers
 }
 
-func (rg *RepeatGenome) getKmer(minimizer, kmerInt uint64) *Kmer {
-    var startInd uint64 = rg.OffsetsToMin[minimizer]
-    var endInd uint64 = startInd + rg.MinCounts[minimizer]
+func (rg *RepeatGenome) getKmer(kmerInt uint64) *Kmer {
+    _, minimizer := getMinimizer(kmerInt, rg.K, rg.M)
+    startInd, minExists := rg.OffsetsToMin[minimizer]
+    if !minExists {
+        return nil
+    }
+    var endInd uint64
+    minCount, minExists := rg.MinCounts[minimizer]
+    if minExists {
+        endInd = startInd + minCount
+    } else {
+        panic("minimizer exists in RepeatGenome.OffsetsToMin but not RepeatGenome.MinCounts")
+    }
+    
+    whereThisKmerShouldBe, kmerExists := rg.KmerIndex[kmerInt]
+    if kmerExists && (whereThisKmerShouldBe < startInd || whereThisKmerShouldBe >= endInd) {
+        panic(fmt.Sprintf("startInd: %d\tendInd: %d\twhereItShouldBe: %d\n", startInd, endInd, whereThisKmerShouldBe))
+    }
+
     if endInd > uint64(len(rg.Kmers)) {
         panic(fmt.Sprintf("getKmer(): out-of-bounds RepeatGenome.Kmers access (len(rg.Kmers) = %d, endInd = %d)", len(rg.Kmers), endInd))
     }
 
+    if !sort.IsSorted(rg.Kmers[startInd:endInd]) {
+        panic("minimizer's kmers not sorted")
+    }
+
+    xs := make([]uint64, 0, 0)
     i, j := startInd, endInd
     for i < j {
-        x := i + (j-i)/2
+        x := (j+i)/2
+        xs = append(xs, x)
         thisKmerInt := *(*uint64)(unsafe.Pointer(&rg.Kmers[x][0]))
         if thisKmerInt == kmerInt {
             return &rg.Kmers[x]
@@ -749,6 +768,12 @@ func (rg *RepeatGenome) getKmer(minimizer, kmerInt uint64) *Kmer {
         } else {
             j = x
         }
+    }
+
+    if kmerExists {
+        byteBuf := make([]byte, rg.K, rg.K)
+        fillKmerBuf(byteBuf, kmerInt)
+        panic(fmt.Sprintf("kmer %s missed\nit was supposed to be at index %d - we searched between %d and %d\nx history: %s\n", string(byteBuf), rg.KmerIndex[kmerInt], startInd, endInd, xs))
     }
 
     return nil
@@ -787,7 +812,7 @@ func (rg *RepeatGenome) kmerSeqFeed(seq string) chan uint64 {
         for i = 0; i < numKmers; i++ {
             kmerSeq := seq[i : i+rg.K]
 
-            // an ugly but necessary byte-skipper
+            // an ugly but necessary n-skipper
             for j := rg.K - 1; j >= 0; j-- {
                 if kmerSeq[j] == byte('n') {
                     i += j
@@ -807,7 +832,7 @@ func (rg *RepeatGenome) kmerSeqFeed(seq string) chan uint64 {
 }
 
 func (rg *RepeatGenome) ClassifyReads(readChan chan string) {
-    t, t2, nils := 0, 0, 0
+    t, t2, nils, missed := 0, 0, 0, 0
     m := make(map[uint64]bool, len(rg.Kmers))
     for _, kmer := range rg.Kmers {
         kmerSeq := *(*uint64)(unsafe.Pointer(&kmer[0]))
@@ -821,17 +846,16 @@ ReadLoop:
         t++
         for kmerSeq := range rg.kmerSeqFeed(readSeq) {
             t2++
-            _, minimizer := getMinimizer(kmerSeq, rg.K, rg.M)
-            kmer := rg.getKmer(minimizer, kmerSeq)
+            kmer := rg.getKmer(kmerSeq)
             if kmer == nil && m[kmerSeq] {
+                missed++
                 fillKmerBuf(byteBuf, kmerSeq)
-                fmt.Println("missed:", string(byteBuf))
             }
             if kmer != nil {
                 fillKmerBuf(byteBuf, kmerSeq)
                 lcaID := *(*uint16)(unsafe.Pointer(&kmer[8]))
                 if lcaID == 25 {
-                    fmt.Println()
+                    fmt.Print()
                 }
                 // only use the first matched kmer
                 continue ReadLoop
@@ -840,7 +864,9 @@ ReadLoop:
             }
         }
     }
-    fmt.Println("ClassifyReads() received", t, "reads and", t2, "kmers,", nils, "of them nil")
+    fmt.Println()
+    fmt.Println("ClassifyReads() received", t, "reads and", t2, "kmers,", t2 - nils, "of them classified")
+    fmt.Println(missed, "kmers missed")
 }
 
 /*

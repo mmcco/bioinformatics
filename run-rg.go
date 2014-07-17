@@ -108,7 +108,7 @@ func main() {
     }
 
     rgFlags := repeatgenome.Flags{*debug, *cpuProfile, *memProfile, genKraken, writeKraken, *writeJSON}
-    repeatGenome := repeatgenome.Generate(genomeName, k, m, rgFlags)
+    rg := repeatgenome.Generate(genomeName, k, m, rgFlags)
 
     workingDirName, err := os.Getwd()
     checkError(err)
@@ -140,6 +140,8 @@ func main() {
         close(readChan)
     }()
 
-    repeatGenome.ClassifyReads(readChan)
-    fmt.Println(repeatGenome.Name, "successfully generated - exiting")
+    fmt.Printf("RepeatGenome.Kmers comprises %.2f GB\n", rg.KmersGBSize())
+    fmt.Printf("%.2f%% of the genome consists of repeat sequences\n", rg.PercentRepeats())
+    rg.ClassifyReads(readChan)
+    fmt.Println(rg.Name, "successfully generated - exiting")
 }
