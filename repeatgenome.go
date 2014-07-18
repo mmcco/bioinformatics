@@ -714,7 +714,7 @@ func (rg *RepeatGenome) getKrakenSlice() error {
     sort.Sort(rg.SortedMins)
 
     if uint64(len(rg.SortedMins)) != numUniqMins {
-        panic(fmt.Sprintf("error populating RepeatGenome.SortedMins - %d minimizers inserted rather than expected %d", len(rg.SortedMins), numUniqMins))
+        panic(fmt.Errorf("error populating RepeatGenome.SortedMins - %d minimizers inserted rather than expected %d", len(rg.SortedMins), numUniqMins))
     }
 
     if rg.Flags.WriteKraken {
@@ -737,7 +737,7 @@ func (rg *RepeatGenome) getKrakenSlice() error {
     }
 
     if uint64(len(rg.Kmers)) != numUniqKmers {
-        panic(fmt.Sprintf("error populating RepeatGenome.Kmers - %d kmers inserted rather than expected %d", len(rg.Kmers), numUniqKmers))
+        panic(fmt.Errorf("error populating RepeatGenome.Kmers - %d kmers inserted rather than expected %d", len(rg.Kmers), numUniqKmers))
     }
 
     if rg.Flags.MemProfile {
@@ -790,7 +790,7 @@ func (rg *RepeatGenome) getKmer(kmerInt uint64) *Kmer {
     }
     
     if endInd > uint64(len(rg.Kmers)) {
-        panic(fmt.Sprintf("getKmer(): out-of-bounds RepeatGenome.Kmers access (len(rg.Kmers) = %d, endInd = %d)", len(rg.Kmers), endInd))
+        panic(fmt.Errorf("getKmer(): out-of-bounds RepeatGenome.Kmers access (len(rg.Kmers) = %d, endInd = %d)", len(rg.Kmers), endInd))
     }
 
     if !sort.IsSorted(rg.Kmers[startInd:endInd]) {
@@ -836,6 +836,8 @@ type SeqAndClass struct {
     Class *ClassNode
 }
 
+/*
+// not that the caller is responsible for closing the channel
 func (rg *RepeatGenome) kmerSeqFeed(seq []byte) chan uint64 {
     c := make(chan uint64)
 
@@ -859,11 +861,11 @@ func (rg *RepeatGenome) kmerSeqFeed(seq []byte) chan uint64 {
             kmerInt := seqToInt(string(kmerSeq))
             c <- minU64(kmerInt, intRevComp(kmerInt, rg.K))
         }
-        close(c)
     }()
 
     return c
 }
+*/
 
 type ReadResponse struct {
     Read []byte
@@ -885,16 +887,32 @@ func (rg *RepeatGenome) ClassifyReads(readChan chan []byte, responseChan chan Re
 
 ReadLoop:
     for readSeq := range readChan {
-        for kmerSeq := range rg.kmerSeqFeed(readSeq) {
-            kmer := rg.getKmer(kmerSeq)
+        k_ := int64(rg.K)
+        numKmers := int64(len(readSeq)) - k_ + 1
 
-            if rg.Flags.Debug && kmer == nil && kmerSet[kmerSeq] {
-                fillKmerBuf(byteBuf, kmerSeq)
-                panic(fmt.Sprintf("RepeatGenome.getKmer() returned nil for %s, but kmer exists\n", byteBuf))
+        var i int64
+    KmerLoop:
+        for i = 0; i < numKmers; i++ {
+
+            for j := k_ + i - 1; j >= i ; j-- {
+                if readSeq[j] == byte('n') {
+                    i += j - i
+                    continue KmerLoop
+                }
+            }
+
+            kmerBytes := readSeq[i : i+k_]
+            kmerInt := seqToInt(string(kmerBytes))
+            kmerInt = minU64(kmerInt, intRevComp(kmerInt, rg.K))
+            kmer := rg.getKmer(kmerInt)
+
+            if rg.Flags.Debug && kmer == nil && kmerSet[kmerInt] {
+                fillKmerBuf(byteBuf, kmerInt)
+                panic(fmt.Errorf("RepeatGenome.getKmer() returned nil for %s, but kmer exists\n", byteBuf))
             }
 
             if kmer != nil {
-                fillKmerBuf(byteBuf, kmerSeq)
+                fillKmerBuf(byteBuf, kmerInt)
                 lcaID := *(*uint16)(unsafe.Pointer(&kmer[8]))
                 responseChan <- ReadResponse{readSeq, rg.ClassTree.NodesByID[lcaID]}
                 // only use the first matched kmer

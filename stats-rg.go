@@ -26,5 +26,5 @@ func (rg *RepeatGenome) PercentRepeats() float64 {
         repeatBases += match.SeqEnd - match.SeqStart
     }
 
-    return float64(repeatBases) / float64(totalBases)
+    return 100 * (float64(repeatBases) / float64(totalBases))
 }

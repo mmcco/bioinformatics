@@ -25,7 +25,7 @@ func seqToInt(seq string) uint64 {
             seqInt |= 3
             break
         default:
-            panic(fmt.Sprintf("byte other than 'a', 'c', 'g', or 't' passed to seqToInt(): %c", seq[i]))
+            panic(fmt.Errorf("byte other than 'a', 'c', 'g', or 't' passed to seqToInt(): %c", seq[i]))
         }
     }
     return seqInt
@@ -51,7 +51,7 @@ func revCompToInt(seq string) uint64 {
         case 't':
             break
         default:
-            panic(fmt.Sprintf("byte other than 'a', 'c', 'g', or 't' passed to revCompToInt(): %c", seq[i]))
+            panic(fmt.Errorf("byte other than 'a', 'c', 'g', or 't' passed to revCompToInt(): %c", seq[i]))
         }
     }
     return seqInt

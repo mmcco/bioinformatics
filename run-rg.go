@@ -147,9 +147,20 @@ func main() {
     }
     netTime := time.Since(startTime)
 
+    if rg.Flags.Debug {
+        classCount := make(map[*repeatgenome.ClassNode]uint64)
+        for response := range rg.GetReadClassChan(readsBytes) {
+            classCount[response.ClassNode]++
+        }
+
+        for classNode, count := range classCount {
+            fmt.Printf("%s\t%d\n", classNode.Name, count)
+        }
+    }
+
     fmt.Printf("%.2f thousand reads processed per minute\n", (float64(numReads) / 1000) / netTime.Minutes())
     fmt.Printf("RepeatGenome.Kmers comprises %.2f GB\n", rg.KmersGBSize())
     fmt.Printf("%.2f%% of the genome consists of repeat sequences\n", rg.PercentRepeats())
-    fmt.Printf("%.2f%% of reads were classified with a repeat sequence (%d out of %d)\n", float64(numClassifiedReads) / float64(numReads), numClassifiedReads, numReads)
+    fmt.Printf("%.2f%% of reads were classified with a repeat sequence (%d out of %d)\n", 100 * (float64(numClassifiedReads) / float64(numReads)), numClassifiedReads, numReads)
     fmt.Println(rg.Name, "successfully generated - exiting")
 }
