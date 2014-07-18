@@ -21,6 +21,8 @@ package repeatgenome
 
    Should switch from strings to byte slices.
 
+   Should probably restrict activity of chans with directionals
+
    Kmer counting should be re-added eventually - it's currently excluded for performance reasons because we aren't using it.
 
    We should test a version that doesn't cache minimizers, as that seems to be a needless bottleneck. It could also be conditional on the number of CPUs available.
@@ -205,11 +207,13 @@ type MinCache struct {
     Cache map[uint64]uint64
 }
 
-func parseMatches(genomeName string) Matches {
+func parseMatches(genomeName string) (error, Matches) {
     // "my_genome_name"  ->  "my_genome_name/my_genome_name.fa.out"
     filepath := strings.Join([]string{genomeName, "/", genomeName, ".fa.out"}, "")
     err, matchLines := fileLines(filepath)
-    checkError(err)
+    if err != nil {
+        return ParseError{"repeatgenome.parseMatches()", filepath, err}, nil
+    }
     // drop header
     matchLines = matchLines[3:]
 
@@ -220,7 +224,10 @@ func parseMatches(genomeName string) Matches {
         matchLine := string(matchLines[i])
         rawVals := strings.Fields(matchLine)
         if len(rawVals) < 15 {
-            panic(fmt.Sprintf("FATAL ERROR: match line supplied to parseMatches() less than 15 fields long (has %d fields and length %d):\n", len(rawVals), len(matchLine)))
+            return ParseError{"repeatgenome.parseMatches()",
+                           filepath,
+                           fmt.Errorf("supplied match line is less than 15 fields long (has %d fields and length %d):\n", len(rawVals), len(matchLine))},
+                   nil
         }
         var match Match
         match.IsRevComp = rawVals[8] == "C"
@@ -237,31 +244,53 @@ func parseMatches(genomeName string) Matches {
 
         // everything in this block is just vanilla trimming, converting, and error checking
         sw_Score, err = strconv.ParseInt(rawVals[0], 10, 32)
-        checkError(err)
+        if err != nil {
+            return ParseError{"repeatgenome.parseMatches()", filepath, err}, nil
+        }
         match.SW_Score = int32(sw_Score)
         match.PercDiv, err = strconv.ParseFloat(rawVals[1], 64)
-        checkError(err)
+        if err != nil {
+            return ParseError{"repeatgenome.parseMatches()", filepath, err}, nil
+        }
         match.PercDel, err = strconv.ParseFloat(rawVals[2], 64)
-        checkError(err)
+        if err != nil {
+            return ParseError{"repeatgenome.parseMatches()", filepath, err}, nil
+        }
         match.PercIns, err = strconv.ParseFloat(rawVals[3], 64)
-        checkError(err)
+        if err != nil {
+            return ParseError{"repeatgenome.parseMatches()", filepath, err}, nil
+        }
         match.SeqName = strings.TrimSpace(rawVals[4])
         match.SeqStart, err = strconv.ParseUint(rawVals[5], 10, 64)
-        checkError(err)
+        if err != nil {
+            return ParseError{"repeatgenome.parseMatches()", filepath, err}, nil
+        }
         match.SeqEnd, err = strconv.ParseUint(rawVals[6], 10, 64)
-        checkError(err)
+        if err != nil {
+            return ParseError{"repeatgenome.parseMatches()", filepath, err}, nil
+        }
         match.SeqRemains, err = strconv.ParseUint(rawVals[7], 10, 64)
-        checkError(err)
+        if err != nil {
+            return ParseError{"repeatgenome.parseMatches()", filepath, err}, nil
+        }
         // match.IsComplement, rawVals[8], moved above
         match.RepeatClass = append(strings.Split(strings.TrimSpace(rawVals[10]), "/"), strings.TrimSpace(rawVals[9]))
         match.RepeatStart, err = strconv.ParseInt(rawVals[11], 10, 64)
-        checkError(err)
+        if err != nil {
+            return ParseError{"repeatgenome.parseMatches()", filepath, err}, nil
+        }
         match.RepeatEnd, err = strconv.ParseInt(rawVals[12], 10, 64)
-        checkError(err)
+        if err != nil {
+            return ParseError{"repeatgenome.parseMatches()", filepath, err}, nil
+        }
         match.RepeatRemains, err = strconv.ParseInt(rawVals[13], 10, 64)
-        checkError(err)
+        if err != nil {
+            return ParseError{"repeatgenome.parseMatches()", filepath, err}, nil
+        }
         match.InsertionID, err = strconv.ParseUint(rawVals[14], 10, 64)
-        checkError(err)
+        if err != nil {
+            return ParseError{"repeatgenome.parseMatches()", filepath, err}, nil
+        }
 
         // necessary swaps to convert reverse complement repeat indexes to positive-strand indexes
         if match.IsRevComp {
@@ -284,12 +313,14 @@ func parseMatches(genomeName string) Matches {
 
         matches = append(matches, match)
     }
-    return matches
+    return nil, matches
 }
 
-func parseGenome(genomeName string) map[string](map[string]string) {
+func parseGenome(genomeName string) (error, map[string](map[string]string)) {
     chromFileInfos, err := ioutil.ReadDir(genomeName)
-    checkError(err)
+    if err != nil {
+        return IOError{"repeatgenome.parseGenome()", err}, nil
+    }
     warned := false
     chroms := make(map[string](map[string]string))
     // used below to store the two keys for RepeatGenome.chroms
@@ -300,7 +331,10 @@ func parseGenome(genomeName string) map[string](map[string]string) {
         // process the ref genome files (*.fa), not the repeat ref files (*.fa.out and *.fa.align) or anything else
         if strings.HasSuffix(chromFilepath, ".fa") {
             err, seqLines := fileLines(chromFilepath)
-            checkError(err)
+            if err != nil {
+                // error should already be IOError
+                return err, nil
+            }
 
             // maps each sequence name in this chrom to a slice of its sequence's lines
             // the list is concatenated at the end for efficiency's sake
@@ -331,17 +365,24 @@ func parseGenome(genomeName string) map[string](map[string]string) {
             }
         }
     }
-    return chroms
+    return nil, chroms
 }
 
-func Generate(genomeName string, k, m uint8, rgFlags Flags) *RepeatGenome {
+func Generate(genomeName string, k, m uint8, rgFlags Flags) (error, *RepeatGenome) {
+    var err error
     // we popoulate the RepeatGenome mostly with helper functions
     // we should consider whether it makes more sense for them to alter the object directly, than to return their results
     rg := new(RepeatGenome)
     rg.Name = genomeName
     rg.Flags = rgFlags
-    rg.chroms = parseGenome(genomeName)
-    rg.Matches = parseMatches(genomeName)
+    err, rg.chroms = parseGenome(genomeName)
+    if err != nil {
+        return err, nil
+    }
+    err, rg.Matches = parseMatches(genomeName)
+    if err != nil {
+        return err, nil
+    }
     rg.getRepeats()
     rg.getClassTree()
     rg.K = k
@@ -393,7 +434,7 @@ func Generate(genomeName string, k, m uint8, rgFlags Flags) *RepeatGenome {
         fmt.Printf("Kmer struct size: %d\n", unsafe.Sizeof(Kmer{}))
     }
 
-    return rg
+    return nil, rg
 }
 
 func (rg *RepeatGenome) getRepeats() {
@@ -569,11 +610,14 @@ func (rg *RepeatGenome) minimizeThread(matchStart, matchEnd uint64, c chan Threa
     close(c)
 }
 
-func (rg *RepeatGenome) getKrakenSlice() {
+func (rg *RepeatGenome) CoordMinimizerThreads() {
+}
+
+func (rg *RepeatGenome) getKrakenSlice() error {
     // a rudimentary way of deciding how many threads to allow, should eventually be improved
     numCPU := runtime.NumCPU()
     if rg.Flags.Debug {
-        fmt.Printf("using %d CPUs\n", numCPU)
+        fmt.Printf("getKrakenSlice() using %d CPUs\n", numCPU)
     }
     runtime.GOMAXPROCS(numCPU)
     var mStart, mEnd uint64
@@ -601,7 +645,7 @@ func (rg *RepeatGenome) getKrakenSlice() {
     minCache := make(map[uint64]uint64)
     kmerMap := make(map[uint64]*Kmer)
 
-    for response := range merge(threadChans) {
+    for response := range mergeThreadResp(threadChans) {
         if kmersProcessed%5000000 == 0 {
             fmt.Println(kmersProcessed/1000000, "million kmers processed")
         }
@@ -674,8 +718,10 @@ func (rg *RepeatGenome) getKrakenSlice() {
     }
 
     if rg.Flags.WriteKraken {
-        err = rg.WriteMins(minMap)
-        checkError(err)
+        err := rg.WriteMins(minMap)
+        if err != nil {
+            return err
+        }
     }
 
     var currOffset uint64 = 0
@@ -697,10 +743,14 @@ func (rg *RepeatGenome) getKrakenSlice() {
     if rg.Flags.MemProfile {
         os.Mkdir("profiles", os.ModeDir)
         f, err := os.Create("profiles/" + rg.Name + ".memprof")
-        checkError(err)
+        if err != nil {
+            return IOError{"RepeatGenome.getKrakenSlice()", err}
+        }
         pprof.WriteHeapProfile(f)
         f.Close()
     }
+
+    return nil
 }
 
 func (rg *RepeatGenome) numKmers() uint64 {
@@ -781,8 +831,6 @@ func (rg *RepeatGenome) getKmer(kmerInt uint64) *Kmer {
     */
 }
 
-type SeqChan chan Seq
-
 type SeqAndClass struct {
     Seq   Seq
     Class *ClassNode
@@ -856,4 +904,48 @@ ReadLoop:
         responseChan <- ReadResponse{readSeq, nil}
     }
     close(responseChan)
+}
+
+func (rg *RepeatGenome) GetReadClassChan(reads [][]byte) chan ReadResponse {
+    // a rudimentary way of deciding how many threads to allow, should eventually be improved
+    numCPU := runtime.NumCPU()
+    if rg.Flags.Debug {
+        fmt.Printf("GetReadClassChan() using %d CPUs\n", numCPU)
+    }
+    runtime.GOMAXPROCS(numCPU)
+
+    readChan := make(chan []byte, 500)  // should probably be buffered
+    responseChans := []chan ReadResponse{}      // should probably be buffered
+
+    go func() {
+        for _, read := range reads {
+            readChan <- read
+        }
+        close(readChan)
+    }()
+
+    for i := 0; i < numCPU; i++ {
+        responseChans = append(responseChans, make(chan ReadResponse))
+        go rg.ClassifyReads(readChan, responseChans[i])
+    }
+
+    var wg sync.WaitGroup
+    wg.Add(len(responseChans))
+    master := make(chan ReadResponse)
+
+    for _, respChan := range responseChans {
+        go func(respChan chan ReadResponse) {
+            for resp := range respChan {
+                master <- resp
+            }
+            wg.Done()
+        }(respChan)
+    }
+
+    go func() {
+        wg.Wait()
+        close(master)
+    }()
+
+    return master
 }

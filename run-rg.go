@@ -6,18 +6,12 @@ import (
     "fmt"
     "io/ioutil"
     "jh/repeatgenome"
+    "log"
     "os"
     "runtime/pprof"
     "time"
 )
 
-func checkError(err error) {
-    if err != nil {
-        panic(err)
-    }
-}
-
-// returns the number of lines and a slice of the lines
 func lines(byteSlice []byte) [][]byte {
     var lines [][]byte = bytes.Split(byteSlice, []byte{'\n'})
     // drop the trailing newlines
@@ -109,15 +103,25 @@ func main() {
     }
 
     rgFlags := repeatgenome.Flags{*debug, *cpuProfile, *memProfile, genKraken, writeKraken, *writeJSON}
-    rg := repeatgenome.Generate(genomeName, k, m, rgFlags)
+    err, rg := repeatgenome.Generate(genomeName, k, m, rgFlags)
+    if err != nil {
+        fmt.Println("./run-rg: RepeatGenome generation failed")
+        panic(err)
+    }
 
     workingDirName, err := os.Getwd()
-    checkError(err)
+    if err != nil {
+        log.Fatal(err)
+    }
     readsDirName := workingDirName + "/" + genomeName + "-reads"
     currDir, err := os.Open(readsDirName)
-    checkError(err)
+    if err != nil {
+        log.Fatal(err)
+    }
     fileinfos, err := currDir.Readdir(-1)
-    checkError(err)
+    if err != nil {
+        log.Fatal(err)
+    }
     processedFiles := []os.FileInfo{}
     for _, fileinfo := range fileinfos {
         if len(fileinfo.Name()) > 5 && fileinfo.Name()[len(fileinfo.Name())-5 : ] == ".proc" {
@@ -132,21 +136,9 @@ func main() {
         }
     }
 
-    readChan := make(chan []byte)  // should probably be buffered
-    responseChan := make(chan repeatgenome.ReadResponse)      // should probably be buffered
-
-    go func() {
-        for _, readBytes := range readsBytes {
-            readChan <- readBytes
-        }
-        close(readChan)
-    }()
-
-    go rg.ClassifyReads(readChan, responseChan)
-
-    var numReads, numClassifiedReads uint64 = 0, 0
     startTime := time.Now()
-    for response := range responseChan {
+    var numReads, numClassifiedReads uint64 = 0, 0
+    for response := range rg.GetReadClassChan(readsBytes) {
         _, classNode := response.Read, response.ClassNode
         numReads++
         if classNode != nil {

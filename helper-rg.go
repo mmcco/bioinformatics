@@ -6,22 +6,37 @@ package repeatgenome
 
 import (
     "bytes"
+    "fmt"
     "io/ioutil"
-    "log"
     //"reflect"
     "sync"
     "unsafe"
 )
 
-var err error
+type ParseError struct {
+    FuncName string
+    Filename string
+    SubError error
+}
 
-func checkError(err error) {
-    if err != nil {
-        log.Fatal(err)
+type IOError struct {
+    FuncName string
+    SubError error
+}
+
+func (parseError ParseError) Error() string {
+    if len(parseError.Filename) == 0 {
+        return fmt.Sprintf("%s: parsing error: %s", parseError.FuncName, parseError.SubError.Error())
+    } else {
+        return fmt.Sprintf("%s: parsing error in file %s: %s", parseError.FuncName, parseError.Filename, parseError.SubError.Error())
     }
 }
 
-func merge(cs [](chan ThreadResponse)) <-chan ThreadResponse {
+func (ioError IOError) Error() string {
+    return fmt.Sprintf("IO error in %s: %s", ioError.FuncName, ioError.SubError.Error())
+}
+
+func mergeThreadResp(cs [](chan ThreadResponse)) <-chan ThreadResponse {
     var wg sync.WaitGroup
     //elemType := reflect.TypeOf(cs).Elem()
     //chanType := reflect.ChanOf(RecvDir, elemType)

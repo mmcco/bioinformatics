@@ -17,13 +17,15 @@ type JSONNode struct {
     Children []*JSONNode `json:"children"`
 }
 
-func (repeatGenome *RepeatGenome) WriteClassJSON(useCumSize, printLeaves bool) {
+func (repeatGenome *RepeatGenome) WriteClassJSON(useCumSize, printLeaves bool) error {
     tree := &repeatGenome.ClassTree
 
     filename := repeatGenome.Name + ".classtree.json"
     outfile, err := os.Create(filename)
-    checkError(err)
     defer outfile.Close()
+    if err != nil {
+        return IOError{"RepeatGenome.WriteClassJSON()", err}
+    }
 
     classToCount := make(map[uint16]uint64)
     for i := range repeatGenome.Kmers {
@@ -43,8 +45,12 @@ func (repeatGenome *RepeatGenome) WriteClassJSON(useCumSize, printLeaves bool) {
     }
 
     jsonBytes, err := json.MarshalIndent(root, "", "\t")
-    checkError(err)
+    if err != nil {
+        return IOError{"RepeatGenome.WriteClassJSON()", err}
+    }
     fmt.Fprint(outfile, string(jsonBytes))
+
+    return nil
 }
 
 func (classTree *ClassTree) jsonRecPopulate(jsonNode *JSONNode, classToCount map[uint16]uint64) {
@@ -152,6 +158,7 @@ func printSeqInt(seqInt uint64, seqLen uint8) {
 
 func writeSeqInt(writer io.ByteWriter, seqInt uint64, seqLen uint8) error {
     var i uint8
+    var err error
     for i = 0; i < seqLen; i++ {
         // this tricky bit arithmetic shifts the two bits of interests to the two rightmost positions, then selects them with the and statement
         switch (seqInt >> (2 * (seqLen - i - 1))) & 3 {
@@ -168,10 +175,10 @@ func writeSeqInt(writer io.ByteWriter, seqInt uint64, seqLen uint8) error {
             err = writer.WriteByte('t')
             break
         default:
-            panic("error in printSeqInt() base selection")
+            err = fmt.Errorf("error in printSeqInt() base selection")
         }
         if err != nil {
-            return err
+            return IOError{"repeatgenome.writeSeqInt()", err}
         }
     }
     return nil
@@ -203,9 +210,11 @@ func fillKmerBuf(slice []byte, seqInt uint64) {
     }
 }
 
-func (repeats *Repeats) Write(filename string) {
+func (repeats *Repeats) Write(filename string) error {
     outfile, err := os.Create(filename)
-    checkError(err)
+    if err != nil {
+        return IOError{"Repeats.Write()", err}
+    }
     defer outfile.Close()
 
     for i := range *repeats {
@@ -213,6 +222,7 @@ func (repeats *Repeats) Write(filename string) {
             fmt.Fprintf(outfile, "%d %s\n", (*repeats)[i].ID, (*repeats)[i].Name)
         }
     }
+    return nil
 }
 
 func (repeat *Repeat) Print() {
