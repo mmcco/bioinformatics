@@ -823,29 +823,37 @@ type ReadResponse struct {
 }
 
 func (rg *RepeatGenome) ClassifyReads(readChan chan []byte, responseChan chan ReadResponse) {
-    m := make(map[uint64]bool, len(rg.Kmers))
-    for _, kmer := range rg.Kmers {
-        kmerSeq := *(*uint64)(unsafe.Pointer(&kmer[0]))
-        m[kmerSeq] = true
+    var kmerSet map[uint64]bool
+    var byteBuf []byte
+    if rg.Flags.Debug {
+        byteBuf = make([]byte, rg.K, rg.K)
+        kmerSet = make(map[uint64]bool, len(rg.Kmers))
+        for _, kmer := range rg.Kmers {
+            kmerSeq := *(*uint64)(unsafe.Pointer(&kmer[0]))
+            kmerSet[kmerSeq] = true
+        }
     }
 
-    byteBuf := make([]byte, rg.K, rg.K)
 
 ReadLoop:
     for readSeq := range readChan {
         for kmerSeq := range rg.kmerSeqFeed(readSeq) {
             kmer := rg.getKmer(kmerSeq)
-            if kmer == nil && m[kmerSeq] {
+
+            if rg.Flags.Debug && kmer == nil && kmerSet[kmerSeq] {
                 fillKmerBuf(byteBuf, kmerSeq)
+                panic(fmt.Sprintf("RepeatGenome.getKmer() returned nil for %s, but kmer exists\n", byteBuf))
             }
+
             if kmer != nil {
                 fillKmerBuf(byteBuf, kmerSeq)
                 lcaID := *(*uint16)(unsafe.Pointer(&kmer[8]))
-                // only use the first matched kmer
                 responseChan <- ReadResponse{readSeq, rg.ClassTree.NodesByID[lcaID]}
+                // only use the first matched kmer
                 continue ReadLoop
             }
         }
+        responseChan <- ReadResponse{readSeq, nil}
     }
     close(responseChan)
 }

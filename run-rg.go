@@ -8,6 +8,7 @@ import (
     "jh/repeatgenome"
     "os"
     "runtime/pprof"
+    "time"
 )
 
 func checkError(err error) {
@@ -144,6 +145,7 @@ func main() {
     go rg.ClassifyReads(readChan, responseChan)
 
     var numReads, numClassifiedReads uint64 = 0, 0
+    startTime := time.Now()
     for response := range responseChan {
         _, classNode := response.Read, response.ClassNode
         numReads++
@@ -151,7 +153,9 @@ func main() {
             numClassifiedReads++
         }
     }
+    netTime := time.Since(startTime)
 
+    fmt.Printf("%.2f thousand reads processed per second\n", (float64(numReads) / 1000) / netTime.Seconds())
     fmt.Printf("RepeatGenome.Kmers comprises %.2f GB\n", rg.KmersGBSize())
     fmt.Printf("%.2f%% of the genome consists of repeat sequences\n", rg.PercentRepeats())
     fmt.Printf("%.2f%% of reads were classified with a repeat sequence (%d out of %d)\n", float64(numClassifiedReads) / float64(numReads), numClassifiedReads, numReads)
