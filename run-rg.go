@@ -147,7 +147,7 @@ func main() {
     }
     netTime := time.Since(startTime)
 
-    fmt.Printf("%.2f thousand reads processed per second\n", (float64(numReads) / 1000) / netTime.Seconds())
+    fmt.Printf("%.2f thousand reads processed per minute\n", (float64(numReads) / 1000) / netTime.Minutes())
     fmt.Printf("RepeatGenome.Kmers comprises %.2f GB\n", rg.KmersGBSize())
     fmt.Printf("%.2f%% of the genome consists of repeat sequences\n", rg.PercentRepeats())
     fmt.Printf("%.2f%% of reads were classified with a repeat sequence (%d out of %d)\n", float64(numClassifiedReads) / float64(numReads), numClassifiedReads, numReads)
