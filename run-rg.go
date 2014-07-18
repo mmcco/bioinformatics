@@ -131,17 +131,29 @@ func main() {
         }
     }
 
-    readChan := make(chan string)
+    readChan := make(chan []byte)  // should probably be buffered
+    responseChan := make(chan repeatgenome.ReadResponse)      // should probably be buffered
 
     go func() {
         for _, readBytes := range readsBytes {
-            readChan <- string(readBytes)
+            readChan <- readBytes
         }
         close(readChan)
     }()
 
+    go rg.ClassifyReads(readChan, responseChan)
+
+    var numReads, numClassifiedReads uint64 = 0, 0
+    for response := range responseChan {
+        _, classNode := response.Read, response.ClassNode
+        numReads++
+        if classNode != nil {
+            numClassifiedReads++
+        }
+    }
+
     fmt.Printf("RepeatGenome.Kmers comprises %.2f GB\n", rg.KmersGBSize())
     fmt.Printf("%.2f%% of the genome consists of repeat sequences\n", rg.PercentRepeats())
-    rg.ClassifyReads(readChan)
+    fmt.Printf("%.2f%% of reads were classified with a repeat sequence (%d out of %d)\n", float64(numClassifiedReads) / float64(numReads), numClassifiedReads, numReads)
     fmt.Println(rg.Name, "successfully generated - exiting")
 }
