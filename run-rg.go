@@ -109,6 +109,18 @@ func main() {
         panic(err)
     }
 
+    fmt.Println(len(rg.Repeats), "repeats")
+    fmt.Println(len(rg.ClassTree.ClassNodes), "class nodes")
+    fmt.Println(len(rg.Matches), "matches")
+    classNodesWithRepeats := 0
+    for _, classNode := range rg.ClassTree.ClassNodes {
+        if classNode.Repeat != nil {
+            classNodesWithRepeats++
+        }
+    }
+    fmt.Println(classNodesWithRepeats, "class nodes with repeats")
+    fmt.Println()
+
     workingDirName, err := os.Getwd()
     if err != nil {
         log.Fatal(err)
@@ -184,12 +196,41 @@ func main() {
             readSAMs = append(readSAMs, readSAM)
         }
     }
-
     responses := []repeatgenome.ReadSAMResponse{}
+    var numClassified = 0
     for response := range rg.GetReadSAMClassChan(readSAMs) {
         responses = append(responses, response)
+        if response.ClassNode != nil {
+            numClassified++
+        }
     }
 
+    if rg.Flags.Debug {
+        for _, resp := range responses[:20] {
+            fmt.Printf("%s[%d:%d]: %s\n", resp.ReadSAM.SeqName, resp.ReadSAM.StartInd, resp.ReadSAM.StartInd + uint64(len(resp.ReadSAM.Seq)), resp.ReadSAM.Seq)
+            if resp.ClassNode != nil {
+                fmt.Printf("%s\n\n", resp.ClassNode.Name)
+            } else {
+                fmt.Printf("<nil>\n\n")
+            }
+        }
+        
+        for _, resp := range responses {
+            if resp.ReadSAM.SeqName == "chr2L" && resp.ReadSAM.StartInd == 84 {
+                fmt.Println("classified as", resp.ClassNode.Name)
+                repeatgenome.TestNodeSearch(resp.ClassNode, resp.ReadSAM)
+                fmt.Println()
+            }
+        }
+
+        fmt.Println("Satellite/HETRP_DM instances:")
+        for _, inst := range rg.RepeatMap["Satellite/HETRP_DM"].Instances {
+            fmt.Printf("\t%s[%d:%d]\n", inst.SeqName, inst.SeqStart, inst.SeqEnd)
+        }
+        fmt.Println()
+    }
+
+    fmt.Println(numClassified, "of", len(responses), "reads classified")
     fmt.Printf("%.2f%% of classified reads overlapped an instance of their assigned repeat class\n", rg.PercentTrueClassifications(responses))
     fmt.Println(rg.Name, "successfully generated - exiting")
 }

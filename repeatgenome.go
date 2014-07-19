@@ -21,6 +21,8 @@ package repeatgenome
 
    Should switch from strings to byte slices.
 
+   The concurrent read-kmer generator could be reintroduced using a select statement.
+
    Should probably restrict activity of chans with directionals
 
    Kmer counting should be re-added eventually - it's currently excluded for performance reasons because we aren't using it.
@@ -455,17 +457,20 @@ func (rg *RepeatGenome) getRepeats() {
 
     rg.RepeatMap = make(map[string]*Repeat)
 
-    for _, match := range rg.Matches {
+    // DON'T use the second field of the range - this causes the Match struct to be copied
+    // creating an alias struct (match := rg.Matches[i]) of type Match rather than *Match causes the repeat.Instance item to point to a copy, not the original Match struct
+    for i := range rg.Matches {
+        match := &rg.Matches[i]
         // don't bother overwriting
         if repeat, exists := rg.RepeatMap[match.RepeatName]; exists {
-            repeat.Instances = append(repeat.Instances, &match)
+            repeat.Instances = append(repeat.Instances, match)
             match.Repeat = repeat
         } else {
             repeat := Repeat{}
             repeat.ID = uint64(len(rg.Repeats))
             repeat.ClassList = match.RepeatClass
             repeat.Name = match.RepeatName
-            repeat.Instances = []*Match{&match}
+            repeat.Instances = []*Match{match}
             repeat.Locations = append(repeat.Locations, repeatLoc{match.SeqName, match.SeqStart, match.SeqEnd})
 
             rg.Repeats = append(rg.Repeats, repeat)
@@ -634,8 +639,10 @@ func (rg *RepeatGenome) getKrakenSlice() error {
     runtime.GOMAXPROCS(numCPU)
     var mStart, mEnd uint64
 
-    numKmers := rg.numKmers()
-    fmt.Printf("expecting >= %d million kmers\n", numKmers/1000000)
+    if rg.Flags.Debug {
+        numKmers := rg.numKmers()
+        fmt.Printf("expecting >= %d million kmers\n", numKmers/1000000)
+    }
 
     var threadChans [](chan ThreadResponse)
     for i := 0; i < numCPU; i++ {
@@ -679,6 +686,10 @@ func (rg *RepeatGenome) getKrakenSlice() error {
         }
     }
 
+    return rg.populateKraken(minCache, kmerMap)
+}
+
+func (rg *RepeatGenome) populateKraken(minCache map[uint64]uint64, kmerMap map[uint64]*Kmer) error {
     if len(kmerMap) != len(minCache) {
         panic("lengths of kmerMap and minCache are incompatible")
     }
@@ -690,7 +701,7 @@ func (rg *RepeatGenome) getKrakenSlice() error {
     minMap := make(MinMap)
 
     for kmerInt, kmer := range kmerMap {
-        minimizer = minCache[kmerInt]
+        minimizer := minCache[kmerInt]
         kmers, exists := minMap[minimizer]
         if exists {
             minMap[minimizer] = append(kmers, kmer)
@@ -700,11 +711,13 @@ func (rg *RepeatGenome) getKrakenSlice() error {
         delete(kmerMap, kmerInt)
     }
 
-    t := 0
-    for _, kmers := range minMap {
-        t += len(kmers)
+    var minMapCount uint64 = 0
+    for i := range minMap {
+        minMapCount += uint64(len(minMap[i]))
     }
-    fmt.Println(t, "kmers in minMap")
+    if minMapCount != numUniqKmers {
+        panic("error populated minMap - length not equal to that of kmerMap")
+    }
 
     numUniqMins := uint64(len(minMap))
     fmt.Println(numUniqMins, "unique minimizers used")

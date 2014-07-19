@@ -1,6 +1,7 @@
 package repeatgenome
 
 import (
+    "fmt"
     "unsafe"
 )
 
@@ -58,6 +59,50 @@ func recNodeSearch(classNode *ClassNode, readSAM ReadSAM) bool {
             }
         }
     }
+    return false
+}
+
+func TestNodeSearch(classNode *ClassNode, readSAM ReadSAM) bool {
+    if classNode == nil || (classNode.Name != "root" && classNode.Name != "Satellite" && classNode.Name != "Satellite/HETRP_DM") {
+        return false
+    }
+    fmt.Println("testing", classNode.Name)
+    if classNode != nil && classNode.Repeat != nil {
+        for _, match := range classNode.Repeat.Instances {
+            // must compute where the read ends
+            endInd := readSAM.StartInd + uint64(len(readSAM.Seq))
+            fmt.Printf("testing match %s[%d:%d] against %s[%d:%d]\n", match.SeqName, match.SeqStart, match.SeqEnd, readSAM.SeqName, readSAM.StartInd, endInd)
+            if readSAM.SeqName == match.SeqName && readSAM.StartInd < match.SeqEnd && endInd > match.SeqStart {
+                fmt.Println("true")
+                return true
+                // below logic is for checking for at least rg.K overlap
+                /*
+                var overlap uint64 := readSAM.SeqEnd - match.SeqStart
+                if readSAM.SeqStart > match.SeqStart {
+                    overlap -= readSAM.SeqStart - match.SeqStart
+                }
+                if overlap >= uint64(rg.K) {
+                    return true
+                }
+                */
+            }
+        }
+    } else {
+        fmt.Println("no classNode or no classNode.Repeat")
+    }
+    if classNode != nil && classNode.Children != nil {
+        for _, child := range classNode.Children {
+            if TestNodeSearch(child, readSAM) {
+                fmt.Println("true")
+                return true
+            } else {
+                fmt.Println("(child false)")
+            }
+        }
+    } else {
+        fmt.Println("no classNode or no classNode.Children")
+    }
+    fmt.Println("false")
     return false
 }
 
