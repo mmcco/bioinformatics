@@ -133,6 +133,7 @@ type RepeatGenome struct {
     ClassTree     ClassTree
     Repeats       Repeats
     RepeatMap     map[string]*Repeat
+    memProfFile   *os.File
 }
 
 type ClassTree struct {
@@ -384,6 +385,17 @@ func Generate(genomeName string, k, m uint8, rgFlags Flags) (error, *RepeatGenom
     rg := new(RepeatGenome)
     rg.Name = genomeName
     rg.Flags = rgFlags
+
+    if rg.Flags.MemProfile {
+        os.Mkdir("profiles", os.ModeDir)
+        rg.memProfFile, err = os.Create("profiles/" + rg.Name + ".memprof")
+        if err != nil {
+            return IOError{"RepeatGenome.getKrakenSlice()", err}, nil
+        }
+        pprof.WriteHeapProfile(rg.memProfFile)
+        defer rg.memProfFile.Close()
+    }
+
     err, rg.chroms = parseGenome(genomeName)
     if err != nil {
         return err, nil
@@ -685,6 +697,12 @@ func (rg *RepeatGenome) getKrakenSlice() error {
             kmerMap[kmerInt] = kmer
         }
     }
+    fmt.Println("all kmers processed")
+    fmt.Println()
+
+    if rg.Flags.MemProfile {
+        pprof.WriteHeapProfile(rg.memProfFile)
+    }
 
     return rg.populateKraken(minCache, kmerMap)
 }
@@ -695,7 +713,6 @@ func (rg *RepeatGenome) populateKraken(minCache map[uint64]uint64, kmerMap map[u
     }
     numUniqKmers := uint64(len(kmerMap))
 
-    fmt.Println("all minimizers generated")
     fmt.Println(numUniqKmers, "unique kmers generated")
 
     minMap := make(MinMap)
@@ -766,13 +783,7 @@ func (rg *RepeatGenome) populateKraken(minCache map[uint64]uint64, kmerMap map[u
     }
 
     if rg.Flags.MemProfile {
-        os.Mkdir("profiles", os.ModeDir)
-        f, err := os.Create("profiles/" + rg.Name + ".memprof")
-        if err != nil {
-            return IOError{"RepeatGenome.getKrakenSlice()", err}
-        }
-        pprof.WriteHeapProfile(f)
-        f.Close()
+        pprof.WriteHeapProfile(rg.memProfFile)
     }
 
     return nil
