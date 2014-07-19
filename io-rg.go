@@ -2,10 +2,12 @@ package repeatgenome
 
 import (
     "bufio"
+    "bytes"
     "encoding/json"
     "fmt"
     "io"
     "os"
+    "strconv"
     "strings"
     "unsafe"
 )
@@ -315,10 +317,59 @@ func (seq *Seq) Print() {
 
 func readSimSeqReads(filepath string) (error, Seqs) {
     err, lines := fileLines(filepath)
+    if err != nil {
+        return err, nil
+    }
 
     simReads := make(Seqs, 0, len(lines))
     for _, line := range lines {
         simReads = append(simReads, GetSeq(line))
     }
-    return err, simReads
+    return nil, simReads
+}
+
+type ReadSAM struct {
+    Seq      []byte
+    SeqName  string
+    StartInd uint64
+}
+
+type ReadSAMResponse struct {
+    ReadSAM ReadSAM
+    ClassNode *ClassNode
+}
+
+func ParseReadSAMs(filepath string) (error, []ReadSAM) {
+    err, lines := fileLines(filepath)
+    if err != nil {
+        return err, nil
+    }
+
+    if len(lines) < 3 {
+        err := ParseError{"ParseReadSAMs()", filepath, fmt.Errorf("only %d lines in SAM file - need at least three", len(lines))}
+        return err, nil
+    }
+
+    // drop header
+    lines = lines[3:]
+    readSAMs := make([]ReadSAM, len(lines), len(lines))
+
+    for i, line := range lines {
+        fields := bytes.Fields(line)
+        if len(fields) != 12 {
+            err := ParseError{"ParseReadSAMs()", filepath, fmt.Errorf("SAM line has %d fields - 12 expected", len(fields))}
+            return err, nil
+        }
+        
+        readSAMs[i].Seq = fields[9]
+        readSAMs[i].SeqName = string(fields[2])
+        readSAMs[i].StartInd, err = strconv.ParseUint(string(fields[3]), 10, 64)
+        if err != nil {
+            return err, nil
+        }
+        // start index is 1 in the SAM standard
+        readSAMs[i].StartInd--
+    }
+
+    return nil, readSAMs
 }

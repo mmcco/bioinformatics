@@ -150,7 +150,9 @@ func main() {
     if rg.Flags.Debug {
         classCount := make(map[*repeatgenome.ClassNode]uint64)
         for response := range rg.GetReadClassChan(readsBytes) {
-            classCount[response.ClassNode]++
+            if response.ClassNode != nil {
+                classCount[response.ClassNode]++
+            }
         }
 
         for classNode, count := range classCount {
@@ -162,5 +164,32 @@ func main() {
     fmt.Printf("RepeatGenome.Kmers comprises %.2f GB\n", rg.KmersGBSize())
     fmt.Printf("%.2f%% of the genome consists of repeat sequences\n", rg.PercentRepeats())
     fmt.Printf("%.2f%% of reads were classified with a repeat sequence (%d out of %d)\n", 100 * (float64(numClassifiedReads) / float64(numReads)), numClassifiedReads, numReads)
+
+    fmt.Println()
+    fmt.Println("rerunning with SAM to check classification correctness")
+    
+    samFiles := []os.FileInfo{}
+    for _, fileinfo := range fileinfos {
+        if len(fileinfo.Name()) > 10 && fileinfo.Name()[len(fileinfo.Name())-10 : ] == ".fasta.sam" {
+            samFiles = append(samFiles, fileinfo)
+        }
+    }
+    readSAMs := []repeatgenome.ReadSAM{}
+    for _, samFile := range samFiles {
+        err, theseReadSAMs := repeatgenome.ParseReadSAMs(samFile.Name())
+        if err != nil {
+            panic(err)
+        }
+        for _, readSAM := range theseReadSAMs {
+            readSAMs = append(readSAMs, readSAM)
+        }
+    }
+
+    responses := []repeatgenome.ReadSAMResponse{}
+    for response := range rg.GetReadSAMClassChan(readSAMs) {
+        responses = append(responses, response)
+    }
+
+    fmt.Printf("%.2f%% of classified reads overlapped an instance of their assigned repeat class\n", rg.PercentTrueClassifications(responses))
     fmt.Println(rg.Name, "successfully generated - exiting")
 }

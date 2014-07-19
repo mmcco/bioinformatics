@@ -118,19 +118,19 @@ type RepeatGenome struct {
     Flags Flags
     // maps a chromosome name to a map of its sequences
     // as discussed above, though, matches only contain 1D sequence indexes
-    chroms       map[string](map[string]string)
-    K            uint8
-    M            uint8
-    Kmers        Kmers
+    chroms        map[string](map[string]string)
+    K             uint8
+    M             uint8
+    Kmers         Kmers
     // stores the offset of each minimizer's first kmer in RepeatGenome.Kmers
-    OffsetsToMin map[uint64]uint64
+    OffsetsToMin  map[uint64]uint64
     // stores the number of kmers that each minimizer is associated with
-    MinCounts    map[uint64]uint64
-    SortedMins   Uint64Slice
-    Matches      Matches
-    ClassTree    ClassTree
-    Repeats      Repeats
-    RepeatMap    map[string]uint64
+    MinCounts     map[uint64]uint64
+    SortedMins    Uint64Slice
+    Matches       Matches
+    ClassTree     ClassTree
+    Repeats       Repeats
+    RepeatMap     map[string]*Repeat
 }
 
 type ClassTree struct {
@@ -160,6 +160,12 @@ type Seq struct {
 
 type Seqs []Seq
 
+type repeatLoc struct {
+    SeqName  string
+    StartInd uint64
+    EndInd   uint64
+}
+
 type Repeat struct {
     // assigned in simple incremented order starting from 1
     // they are therefore not compatible across genomes
@@ -170,7 +176,8 @@ type Repeat struct {
     ClassList []string
     ClassNode *ClassNode
     Name  string
-    NumInstances uint64
+    Instances []*Match
+    Locations []repeatLoc
 }
 
 type ClassNode struct {
@@ -180,6 +187,7 @@ type ClassNode struct {
     Parent   *ClassNode
     Children []*ClassNode
     IsRoot   bool
+    Repeat   *Repeat
 }
 
 // type synonyms, necessary to implement interfaces (e.g. sort) and methods
@@ -220,13 +228,12 @@ func parseMatches(genomeName string) (error, Matches) {
     var matches Matches
     var sw_Score int64
 
-    for i := range matchLines {
-        matchLine := string(matchLines[i])
-        rawVals := strings.Fields(matchLine)
-        if len(rawVals) < 15 {
+    for _, matchLine := range matchLines {
+        rawVals := strings.Fields(string(matchLine))
+        if len(rawVals) != 15 {
             return ParseError{"repeatgenome.parseMatches()",
                            filepath,
-                           fmt.Errorf("supplied match line is less than 15 fields long (has %d fields and length %d):\n", len(rawVals), len(matchLine))},
+                           fmt.Errorf("supplied match line is not 15 fields long (has %d fields and length %d):\n", len(rawVals), len(matchLine))},
                    nil
         }
         var match Match
@@ -398,43 +405,46 @@ func Generate(genomeName string, k, m uint8, rgFlags Flags) (error, *RepeatGenom
     }
 
     if rg.Flags.Debug {
-
-        fmt.Println()
-        for k, v := range rg.chroms {
-            for k_, v_ := range v {
-                fmt.Printf("chrom: %s\tseq: %s\t%s...%s\n", k, k_, v_[:20], v_[len(v_)-20:])
-            }
-        }
-        fmt.Println()
-
-        fmt.Println()
-        fmt.Println("number of chromosomes parsed:", len(rg.chroms))
-        fmt.Println()
-
-        fmt.Println("total number of bases in genome:", rg.Size())
-
-        rg.ClassTree.PrintBranches()
-        fmt.Println()
-        fmt.Println("number of ClassNodes:", len(rg.ClassTree.ClassNodes))
-        fmt.Println()
-
-        fmt.Println("rg.ClassTree.getLCA(rg.ClassTree.ClassNodes['DNA/TcMar-Mariner'], rg.ClassTree.ClassNodes['DNA/TcMar-Tc1']):", rg.ClassTree.getLCA(rg.ClassTree.ClassNodes["DNA/TcMar-Mariner"], rg.ClassTree.ClassNodes["DNA/TcMar-Tc1"]))
-
-        fmt.Println()
-        fmt.Println("min(5, 7):", min(5, 7))
-        fmt.Println("max64(int64(5), int64(7)):", max64(int64(5), int64(7)))
-        fmt.Println()
-
-        testSeq := "atgtttgtgtttttcataaagacgaaagatg"
-        offset, thisMin := getMinimizer(seqToInt(testSeq), uint8(len(testSeq)), 15)
-        fmt.Println("getMinimizer('tgctcctgtcatgcatacgcaggtcatgcat', 15) offset :", offset)
-        printSeqInt(thisMin, 15)
-        fmt.Println()
-
-        fmt.Printf("Kmer struct size: %d\n", unsafe.Sizeof(Kmer{}))
+        rg.RunDebugTests()
     }
 
     return nil, rg
+}
+
+func (rg *RepeatGenome) RunDebugTests() {
+    fmt.Println()
+    for k, v := range rg.chroms {
+        for k_, v_ := range v {
+            fmt.Printf("chrom: %s\tseq: %s\t%s...%s\n", k, k_, v_[:20], v_[len(v_)-20:])
+        }
+    }
+    fmt.Println()
+
+    fmt.Println()
+    fmt.Println("number of chromosomes parsed:", len(rg.chroms))
+    fmt.Println()
+
+    fmt.Println("total number of bases in genome:", rg.Size())
+
+    rg.ClassTree.PrintBranches()
+    fmt.Println()
+    fmt.Println("number of ClassNodes:", len(rg.ClassTree.ClassNodes))
+    fmt.Println()
+
+    fmt.Println("rg.ClassTree.getLCA(rg.ClassTree.ClassNodes['DNA/TcMar-Mariner'], rg.ClassTree.ClassNodes['DNA/TcMar-Tc1']).Name:", rg.ClassTree.getLCA(rg.ClassTree.ClassNodes["DNA/TcMar-Mariner"], rg.ClassTree.ClassNodes["DNA/TcMar-Tc1"]).Name)
+
+    fmt.Println()
+    fmt.Println("min(5, 7):", min(5, 7))
+    fmt.Println("max64(int64(5), int64(7)):", max64(int64(5), int64(7)))
+    fmt.Println()
+
+    testSeq := "atgtttgtgtttttcataaagacgaaagatg"
+    offset, thisMin := getMinimizer(seqToInt(testSeq), uint8(len(testSeq)), 15)
+    fmt.Println("getMinimizer('tgctcctgtcatgcatacgcaggtcatgcat', 15) offset :", offset)
+    printSeqInt(thisMin, 15)
+    fmt.Println()
+
+    fmt.Printf("Kmer struct size: %d\n", unsafe.Sizeof(Kmer{}))
 }
 
 func (rg *RepeatGenome) getRepeats() {
@@ -443,24 +453,23 @@ func (rg *RepeatGenome) getRepeats() {
     // we first determine the necessary size of the slice - we can't use append because matches are not sorted by repeatID
     rg.Repeats = Repeats{}
 
-    // maps a repeat's category to its ID
-    rg.RepeatMap = make(map[string]uint64)
+    rg.RepeatMap = make(map[string]*Repeat)
 
     for _, match := range rg.Matches {
         // don't bother overwriting
-        repeatID, exists := rg.RepeatMap[match.RepeatName]
-        if exists {
-            rg.Repeats[repeatID].NumInstances++
-            match.Repeat = &rg.Repeats[repeatID]
+        if repeat, exists := rg.RepeatMap[match.RepeatName]; exists {
+            repeat.Instances = append(repeat.Instances, &match)
+            match.Repeat = repeat
         } else {
             repeat := Repeat{}
             repeat.ID = uint64(len(rg.Repeats))
             repeat.ClassList = match.RepeatClass
             repeat.Name = match.RepeatName
-            repeat.NumInstances = 1
+            repeat.Instances = []*Match{&match}
+            repeat.Locations = append(repeat.Locations, repeatLoc{match.SeqName, match.SeqStart, match.SeqEnd})
 
             rg.Repeats = append(rg.Repeats, repeat)
-            rg.RepeatMap[repeat.Name] = repeat.ID
+            rg.RepeatMap[repeat.Name] = &repeat
 
             match.Repeat = &repeat
         }
@@ -473,7 +482,7 @@ func (rg *RepeatGenome) getClassTree() {
     tree.ClassNodes = make(map[string](*ClassNode))
     tree.NodesByID = make([]*ClassNode, 0)
     // would be prettier if expanded
-    tree.Root = &ClassNode{"root", 0, []string{"root"}, nil, nil, true}
+    tree.Root = &ClassNode{"root", 0, []string{"root"}, nil, nil, true, nil}
     tree.ClassNodes["root"] = tree.Root
     tree.NodesByID = append(tree.NodesByID, tree.Root)
 
@@ -492,6 +501,9 @@ func (rg *RepeatGenome) getClassTree() {
                 classNode.ID = uint16(len(tree.NodesByID))
                 classNode.Class = thisClass
                 classNode.IsRoot = false
+                if repeat, exists := rg.RepeatMap[thisClassName]; exists {
+                    classNode.Repeat = repeat
+                }
 
                 tree.ClassNodes[thisClassName] = classNode
                 tree.NodesByID = append(tree.NodesByID, classNode)
@@ -953,6 +965,102 @@ func (rg *RepeatGenome) GetReadClassChan(reads [][]byte) chan ReadResponse {
 
     for _, respChan := range responseChans {
         go func(respChan chan ReadResponse) {
+            for resp := range respChan {
+                master <- resp
+            }
+            wg.Done()
+        }(respChan)
+    }
+
+    go func() {
+        wg.Wait()
+        close(master)
+    }()
+
+    return master
+}
+
+func (rg *RepeatGenome) ClassifyReadSAMs(readChan chan ReadSAM, responseChan chan ReadSAMResponse) {
+    var kmerSet map[uint64]bool
+    var byteBuf []byte
+    if rg.Flags.Debug {
+        byteBuf = make([]byte, rg.K, rg.K)
+        kmerSet = make(map[uint64]bool, len(rg.Kmers))
+        for _, kmer := range rg.Kmers {
+            kmerSeq := *(*uint64)(unsafe.Pointer(&kmer[0]))
+            kmerSet[kmerSeq] = true
+        }
+    }
+
+
+ReadLoop:
+    for readSAM := range readChan {
+        k_ := int64(rg.K)
+        numKmers := int64(len(readSAM.Seq)) - k_ + 1
+
+        var i int64
+    KmerLoop:
+        for i = 0; i < numKmers; i++ {
+
+            for j := k_ + i - 1; j >= i ; j-- {
+                if readSAM.Seq[j] == byte('n') {
+                    i += j - i
+                    continue KmerLoop
+                }
+            }
+
+            kmerBytes := readSAM.Seq[i : i+k_]
+            kmerInt := seqToInt(string(kmerBytes))
+            kmerInt = minU64(kmerInt, intRevComp(kmerInt, rg.K))
+            kmer := rg.getKmer(kmerInt)
+
+            if rg.Flags.Debug && kmer == nil && kmerSet[kmerInt] {
+                fillKmerBuf(byteBuf, kmerInt)
+                panic(fmt.Errorf("RepeatGenome.getKmer() returned nil for %s, but kmer exists\n", byteBuf))
+            }
+
+            if kmer != nil {
+                fillKmerBuf(byteBuf, kmerInt)
+                lcaID := *(*uint16)(unsafe.Pointer(&kmer[8]))
+                responseChan <- ReadSAMResponse{readSAM, rg.ClassTree.NodesByID[lcaID]}
+                // only use the first matched kmer
+                continue ReadLoop
+            }
+        }
+        responseChan <- ReadSAMResponse{readSAM, nil}
+    }
+    close(responseChan)
+}
+
+func (rg *RepeatGenome) GetReadSAMClassChan(reads []ReadSAM) chan ReadSAMResponse {
+    // a rudimentary way of deciding how many threads to allow, should eventually be improved
+    numCPU := runtime.NumCPU()
+    if rg.Flags.Debug {
+        fmt.Printf("GetReadClassChan() using %d CPUs\n", numCPU)
+    }
+    runtime.GOMAXPROCS(numCPU)
+
+    readChan := make(chan ReadSAM, 500)
+    responseChans := []chan ReadSAMResponse{}      // should probably be buffered
+
+    go func() {
+        for _, read := range reads {
+            readChan <- read
+        }
+        close(readChan)
+    }()
+
+    for i := 0; i < numCPU; i++ {
+        responseChans = append(responseChans, make(chan ReadSAMResponse))
+        go rg.ClassifyReadSAMs(readChan, responseChans[i])
+    }
+
+    var wg sync.WaitGroup
+    wg.Add(len(responseChans))
+    master := make(chan ReadSAMResponse)
+
+    for _, respChan := range responseChans {
+        go func(respChan chan ReadSAMResponse) {
             for resp := range respChan {
                 master <- resp
             }
