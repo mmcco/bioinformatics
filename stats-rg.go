@@ -32,7 +32,7 @@ func (rg *RepeatGenome) PercentRepeats() float64 {
 // written for the PercentTrueClassification() below
 // determines whether a read overlaps any repeat instances in the given ClassNode's subtree
 func recNodeSearch(classNode *ClassNode, readSAM ReadSAM) bool {
-    if classNode.Repeat != nil {
+    if classNode != nil && classNode.Repeat != nil {
         for _, match := range classNode.Repeat.Instances {
             // must compute where the read ends
             endInd := readSAM.StartInd + uint64(len(readSAM.Seq))
@@ -51,9 +51,11 @@ func recNodeSearch(classNode *ClassNode, readSAM ReadSAM) bool {
             }
         }
     }
-    for _, child := range classNode.Children {
-        if recNodeSearch(child, readSAM) {
-            return true
+    if classNode != nil && classNode.Children != nil {
+        for _, child := range classNode.Children {
+            if recNodeSearch(child, readSAM) {
+                return true
+            }
         }
     }
     return false

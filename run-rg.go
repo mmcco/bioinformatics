@@ -176,7 +176,7 @@ func main() {
     }
     readSAMs := []repeatgenome.ReadSAM{}
     for _, samFile := range samFiles {
-        err, theseReadSAMs := repeatgenome.ParseReadSAMs(samFile.Name())
+        err, theseReadSAMs := repeatgenome.ParseReadSAMs(readsDirName + "/" + samFile.Name())
         if err != nil {
             panic(err)
         }
