@@ -9,6 +9,8 @@ import (
     "fmt"
     "io/ioutil"
     //"reflect"
+    "strconv"
+    "strings"
     "sync"
     "unsafe"
 )
@@ -34,6 +36,33 @@ func (parseError ParseError) Error() string {
 
 func (ioError IOError) Error() string {
     return fmt.Sprintf("IO error in %s: %s", ioError.FuncName, ioError.SubError.Error())
+}
+
+// Courtesy of https://github.com/dustin/go-humanize
+// Returns a string representing the int, with commas for readability.
+func comma(v uint64) string {
+    sign := ""
+    if v < 0 {
+        sign = "-"
+        v = 0 - v
+    }
+
+    parts := []string{"", "", "", "", "", "", "", ""}
+    j := len(parts) - 1
+
+    for v > 999 {
+        parts[j] = strconv.FormatUint(v%1000, 10)
+        switch len(parts[j]) {
+        case 2:
+            parts[j] = "0" + parts[j]
+        case 1:
+            parts[j] = "00" + parts[j]
+        }
+        v = v / 1000
+        j--
+    }
+    parts[j] = strconv.Itoa(int(v))
+    return sign + strings.Join(parts[j:len(parts)], ",")
 }
 
 func mergeThreadResp(cs [](chan ThreadResponse)) <-chan ThreadResponse {

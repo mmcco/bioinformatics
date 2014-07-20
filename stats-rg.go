@@ -108,11 +108,15 @@ func TestNodeSearch(classNode *ClassNode, readSAM ReadSAM) bool {
 
 // we currently use the simple metric that the read and one of the repeat's instances overlap at all
 func (rg *RepeatGenome) PercentTrueClassifications(responses []ReadSAMResponse) float64 {
-    var correctClassifications uint64 = 0
+    var classifications, correctClassifications uint64 = 0, 0
+
     for _, resp := range responses {
+        if resp.ClassNode != nil {
+            classifications++
+        }
         if recNodeSearch(resp.ClassNode, resp.ReadSAM) {
             correctClassifications++
         }
     }
-    return 100 * (float64(correctClassifications) / float64(len(responses)))
+    return 100 * (float64(correctClassifications) / float64(classifications))
 }

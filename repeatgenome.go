@@ -91,7 +91,11 @@ type Flags struct {
 // Match.RepeatEnd -  the ending sequence (exclusive) in the repeat consensus sequence
 // Match.RepeatRemains
 // Match.InsertionID - a numerical ID for the repeat type (starts at 1)
-//     Match.Fullname - not in parsed data file - simply repeatClass concatenated - used for map indexing
+
+//     below are not in parsed data file
+// Match.RepeatName - simply repeatClass concatenated - used for printing and map indexing
+// Match.ClassNode
+// Match.Repeat
 type Match struct {
     SW_Score    int32
     PercDiv     float64
@@ -678,7 +682,7 @@ func (rg *RepeatGenome) getKrakenSlice() error {
 
     for response := range mergeThreadResp(threadChans) {
         if kmersProcessed%5000000 == 0 {
-            fmt.Println(kmersProcessed/1000000, "million kmers processed")
+            fmt.Println(comma(kmersProcessed/1000000), "million kmers processed...")
         }
         kmersProcessed++
 
@@ -697,7 +701,7 @@ func (rg *RepeatGenome) getKrakenSlice() error {
             kmerMap[kmerInt] = kmer
         }
     }
-    fmt.Println("all kmers processed")
+    fmt.Println("...all kmers processed")
     fmt.Println()
 
     if rg.Flags.MemProfile {
@@ -713,14 +717,14 @@ func (rg *RepeatGenome) populateKraken(minCache map[uint64]uint64, kmerMap map[u
     }
     numUniqKmers := uint64(len(kmerMap))
 
-    fmt.Println(numUniqKmers, "unique kmers generated")
+    fmt.Println(comma(numUniqKmers), "unique kmers generated")
 
     minMap := make(MinMap)
 
     for kmerInt, kmer := range kmerMap {
         minimizer := minCache[kmerInt]
-        kmers, exists := minMap[minimizer]
-        if exists {
+
+        if kmers, exists := minMap[minimizer]; exists {
             minMap[minimizer] = append(kmers, kmer)
         } else {
             minMap[minimizer] = PKmers{kmer}
@@ -737,7 +741,7 @@ func (rg *RepeatGenome) populateKraken(minCache map[uint64]uint64, kmerMap map[u
     }
 
     numUniqMins := uint64(len(minMap))
-    fmt.Println(numUniqMins, "unique minimizers used")
+    fmt.Println(comma(numUniqMins), "unique minimizers used")
 
     // manual deletion to save memory
     kmerMap = nil
@@ -904,7 +908,7 @@ func (rg *RepeatGenome) kmerSeqFeed(seq []byte) chan uint64 {
 */
 
 type ReadResponse struct {
-    Read []byte
+    Seq       []byte
     ClassNode *ClassNode
 }
 

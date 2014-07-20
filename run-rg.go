@@ -9,6 +9,8 @@ import (
     "log"
     "os"
     "runtime/pprof"
+    "strconv"
+    "strings"
     "time"
 )
 
@@ -29,6 +31,33 @@ func fileLines(filepath string) (err error, linesBytes [][]byte) {
     } else {
         return nil, lines(rawBytes)
     }
+}
+
+// Courtesy of https://github.com/dustin/go-humanize
+// Returns a string representing the int, with commas for readability.
+func comma(v uint64) string {
+    sign := ""
+    if v < 0 {
+        sign = "-"
+        v = 0 - v
+    }
+
+    parts := []string{"", "", "", "", "", "", "", ""}
+    j := len(parts) - 1
+
+    for v > 999 {
+        parts[j] = strconv.FormatUint(v%1000, 10)
+        switch len(parts[j]) {
+        case 2:
+            parts[j] = "0" + parts[j]
+        case 1:
+            parts[j] = "00" + parts[j]
+        }
+        v = v / 1000
+        j--
+    }
+    parts[j] = strconv.Itoa(int(v))
+    return sign + strings.Join(parts[j:len(parts)], ",")
 }
 
 func main() {
@@ -110,16 +139,9 @@ func main() {
         panic(err)
     }
 
-    fmt.Println(len(rg.Repeats), "repeats")
-    fmt.Println(len(rg.ClassTree.ClassNodes), "class nodes")
-    fmt.Println(len(rg.Matches), "matches")
-    classNodesWithRepeats := 0
-    for _, classNode := range rg.ClassTree.ClassNodes {
-        if classNode.Repeat != nil {
-            classNodesWithRepeats++
-        }
-    }
-    fmt.Println(classNodesWithRepeats, "class nodes with repeats")
+    fmt.Println(comma(uint64(len(rg.Repeats))), "repeat types")
+    fmt.Println(comma(uint64(len(rg.ClassTree.ClassNodes))), "class nodes")
+    fmt.Println(comma(uint64(len(rg.Matches))), "matches")
     fmt.Println()
 
     workingDirName, err := os.Getwd()
@@ -150,12 +172,15 @@ func main() {
     }
 
     startTime := time.Now()
-    var numReads, numClassifiedReads uint64 = 0, 0
+    var numReads, numClassifiedReads, rootReads uint64 = 0, 0, 0
     for response := range rg.GetReadClassChan(readsBytes) {
-        _, classNode := response.Read, response.ClassNode
+        _, classNode := response.Seq, response.ClassNode
         numReads++
         if classNode != nil {
             numClassifiedReads++
+            if classNode == rg.ClassTree.Root {
+                rootReads++
+            }
         }
     }
     netTime := time.Since(startTime)
@@ -180,11 +205,12 @@ func main() {
     fmt.Printf("%.2f thousand reads processed per minute\n", (float64(numReads) / 1000) / netTime.Minutes())
     fmt.Printf("RepeatGenome.Kmers comprises %.2f GB\n", rg.KmersGBSize())
     fmt.Printf("%.2f%% of the genome consists of repeat sequences\n", rg.PercentRepeats())
-    fmt.Printf("%.2f%% of reads were classified with a repeat sequence (%d of %d)\n", 100 * (float64(numClassifiedReads) / float64(numReads)), numClassifiedReads, numReads)
+    fmt.Printf("%.2f%% of reads were classified with a repeat sequence (%s of %s)\n", 100 * (float64(numClassifiedReads) / float64(numReads)), comma(numClassifiedReads), comma(numReads))
+    fmt.Printf("%.2f%% of classified reads were classified at the class tree root (%s reads)\n", 100 * (float64(rootReads) / float64(numReads)), comma(rootReads))
     fmt.Println()
 
     if *verifyClass {
-        fmt.Println("rerunning with SAM-formatted reads to check classification correctness")
+        fmt.Println("...using SAM-formatted reads to check classification correctness...")
         
         samFiles := []os.FileInfo{}
         for _, fileinfo := range fileinfos {
@@ -202,6 +228,24 @@ func main() {
                 readSAMs = append(readSAMs, readSAM)
             }
         }
+
+        // run classification again to populate responses list
+        responses := []repeatgenome.ReadResponse{}
+        for response := range rg.GetReadClassChan(readsBytes) {
+            responses = append(responses, response)
+        }
+
+        seqToClass := make(map[string]*repeatgenome.ClassNode, len(responses))
+        for _, response := range responses {
+            seqToClass[string(response.Seq)] = response.ClassNode
+        }
+
+        readSAMResps := []repeatgenome.ReadSAMResponse{}
+        for _, readSAM := range readSAMs {
+            readSAMResps = append(readSAMResps, repeatgenome.ReadSAMResponse{readSAM, seqToClass[string(readSAM.Seq)]})
+        }
+
+        /*
         responses := []repeatgenome.ReadSAMResponse{}
         var numClassified = 0
         for response := range rg.GetReadSAMClassChan(readSAMs) {
@@ -237,7 +281,8 @@ func main() {
         }
 
         fmt.Println(numClassified, "of", len(responses), "reads classified")
-        fmt.Printf("%.2f%% of classified reads overlapped an instance of their assigned repeat class\n", rg.PercentTrueClassifications(responses))
+        */
+        fmt.Printf("%.2f%% of classified reads overlapped an instance of their assigned repeat class\n", rg.PercentTrueClassifications(readSAMResps))
         fmt.Println()
     }
 
