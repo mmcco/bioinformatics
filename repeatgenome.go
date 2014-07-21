@@ -124,7 +124,7 @@ type RepeatGenome struct {
     Flags Flags
     // maps a chromosome name to a map of its sequences
     // as discussed above, though, matches only contain 1D sequence indexes
-    chroms        map[string](map[string]string)
+    chroms        map[string](map[string][]byte)
     K             uint8
     M             uint8
     Kmers         Kmers
@@ -330,13 +330,13 @@ func parseMatches(genomeName string) (error, Matches) {
     return nil, matches
 }
 
-func parseGenome(genomeName string) (error, map[string](map[string]string)) {
+func parseGenome(genomeName string) (error, map[string](map[string][]byte)) {
     chromFileInfos, err := ioutil.ReadDir(genomeName)
     if err != nil {
         return IOError{"repeatgenome.parseGenome()", err}, nil
     }
     warned := false
-    chroms := make(map[string](map[string]string))
+    chroms := make(map[string](map[string][]byte))
     // used below to store the two keys for RepeatGenome.chroms
     for i := range chromFileInfos {
         // "my_genome_name", "my_chrom_name"  ->  "my_genome_name/my_chrom_name"
@@ -373,9 +373,9 @@ func parseGenome(genomeName string) (error, map[string](map[string]string)) {
             }
             // finally, we insert this map into the full map
             chromName := chromFilepath[len(genomeName)+1 : len(chromFilepath)-3]
-            chroms[chromName] = make(map[string]string)
+            chroms[chromName] = make(map[string][]byte)
             for k, v := range seqMap {
-                chroms[chromName][k] = strings.ToLower(string(bytes.Join(v, []byte{})))
+                chroms[chromName][k] = bytes.ToLower(bytes.Join(v, []byte{}))
             }
         }
     }
@@ -456,7 +456,7 @@ func (rg *RepeatGenome) RunDebugTests() {
     fmt.Println("max64(int64(5), int64(7)):", max64(int64(5), int64(7)))
     fmt.Println()
 
-    testSeq := "atgtttgtgtttttcataaagacgaaagatg"
+    testSeq := []byte("atgtttgtgtttttcataaagacgaaagatg")
     offset, thisMin := getMinimizer(seqToInt(testSeq), uint8(len(testSeq)), 15)
     fmt.Println("getMinimizer('tgctcctgtcatgcatacgcaggtcatgcat', 15) offset :", offset)
     printSeqInt(thisMin, 15)
@@ -601,13 +601,11 @@ func (rg *RepeatGenome) minimizeThread(matchStart, matchEnd uint64, c chan Threa
     k := rg.K
     k_ := uint64(k)
     m := rg.M
-    //m_ := uint64(m)
-    var seq string
-    var x, matchLen, kmerInt, thisMin uint64
+    var matchLen, kmerInt, thisMin uint64
 
     for i := matchStart; i < matchEnd; i++ {
         match = &rg.Matches[i]
-        seq = rg.chroms[match.SeqName][match.SeqName]
+        seq := rg.chroms[match.SeqName][match.SeqName]
         matchLen = match.SeqEnd - match.SeqStart
         // for now, we will ignore matches too short to be traditionally minimized
         if matchLen < k_ {
@@ -618,7 +616,7 @@ func (rg *RepeatGenome) minimizeThread(matchStart, matchEnd uint64, c chan Threa
         for j := match.SeqStart; j <= match.SeqEnd-k_; j++ {
             // we begin by skipping any kmers containing n's
             // we start checking from the end for maximum skipping efficiency
-            for x = k_ - 1; x >= 0; x-- {
+            for x := k_ - 1; x >= 0; x-- {
                 if seq[j+x] == byte('n') {
                     j += x
                     continue KmerLoop
@@ -796,16 +794,14 @@ func (rg *RepeatGenome) populateKraken(minCache map[uint64]uint64, kmerMap map[u
 func (rg *RepeatGenome) numKmers() uint64 {
     var k = int(rg.K)
     var numKmers uint64 = 0
-    var seq string
-    seqs := []string{}
-    var match *Match
+    seqs := [][]byte{}
 
     splitOnN := func(c rune) bool { return c == 'n' }
 
     for i := range rg.Matches {
-        match = &rg.Matches[i]
-        seq = rg.chroms[match.SeqName][match.SeqName][match.SeqStart:match.SeqEnd]
-        seqs = strings.FieldsFunc(seq, splitOnN)
+        match := &rg.Matches[i]
+        seq := rg.chroms[match.SeqName][match.SeqName][match.SeqStart:match.SeqEnd]
+        seqs = bytes.FieldsFunc(seq, splitOnN)
         for j := range seqs {
             if len(seqs[j]) >= k {
                 numKmers += uint64(len(seqs[j]) - k + 1)
@@ -942,7 +938,7 @@ ReadLoop:
             }
 
             kmerBytes := readSeq[i : i+k_]
-            kmerInt := seqToInt(string(kmerBytes))
+            kmerInt := seqToInt((kmerBytes))
             kmerInt = minU64(kmerInt, intRevComp(kmerInt, rg.K))
             kmer := rg.getKmer(kmerInt)
 
@@ -1038,7 +1034,7 @@ ReadLoop:
             }
 
             kmerBytes := readSAM.Seq[i : i+k_]
-            kmerInt := seqToInt(string(kmerBytes))
+            kmerInt := seqToInt(kmerBytes)
             kmerInt = minU64(kmerInt, intRevComp(kmerInt, rg.K))
             kmer := rg.getKmer(kmerInt)
 

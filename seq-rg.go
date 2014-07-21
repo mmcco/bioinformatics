@@ -5,14 +5,14 @@ import (
 )
 // General sequence-manipulation functions.
 
-func seqToInt(seq string) uint64 {
+func seqToInt(seq []byte) uint64 {
     if len(seq) < 1 || len(seq) > 31 {
         panic("seqToInt() can only int-ize sequences where 0 < length < 32")
     }
     var seqInt uint64 = 0
-    for i := 0; i < len(seq); i++ {
+    for _, c := range seq {
         seqInt = seqInt << 2
-        switch seq[i] {
+        switch c {
         case 'a':
             break
         case 'c':
@@ -25,13 +25,13 @@ func seqToInt(seq string) uint64 {
             seqInt |= 3
             break
         default:
-            panic(fmt.Errorf("byte other than 'a', 'c', 'g', or 't' passed to seqToInt(): %c", seq[i]))
+            panic(fmt.Errorf("byte other than 'a', 'c', 'g', or 't' passed to seqToInt(): %c", c))
         }
     }
     return seqInt
 }
 
-func revCompToInt(seq string) uint64 {
+func revCompToInt(seq []byte) uint64 {
     if len(seq) < 1 || len(seq) > 31 {
         panic("revCompToInt() can only int-ize sequences where 0 < length < 32")
     }
@@ -122,10 +122,9 @@ func getMinimizer(kmer uint64, k, m uint8) (uint8, uint64) {
     return currOffset, currMin
 }
 
-func revComp(seq string) string {
+func revComp(seq []byte) []byte {
     var revCompSeq = make([]byte, 0, len(seq))
-    // !!! DO NOT use range notation here - doing so is inefficient, converting the string to a []rune
-    for i := 0; i < len(seq); i++ {
+    for i := range seq {
         switch seq[len(seq)-i-1] {
         case 'a':
             revCompSeq = append(revCompSeq, 't')
@@ -143,12 +142,12 @@ func revComp(seq string) string {
             panic("byte other than 'a', 'c', 'g', or 't' supplied to revComp")
         }
     }
-    return string(revCompSeq)
+    return revCompSeq
 }
 
 // The logic for determining the minimizer
 // Currently, it uses simple lexicographic ordering
-func seqLessThan(a, b string) bool {
+func seqLessThan(a, b []byte) bool {
     // min function manually inlined for speed - dubious
     var size int
     if len(a) < len(b) {
