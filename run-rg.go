@@ -172,8 +172,15 @@ func main() {
     }
 
     startTime := time.Now()
+    for _ = range rg.GetReadClassChan(readsBytes) {
+
+    }
+    netTime := time.Since(startTime)
+
     var numReads, numClassifiedReads, rootReads uint64 = 0, 0, 0
+    var responses []repeatgenome.ReadResponse
     for response := range rg.GetReadClassChan(readsBytes) {
+        responses = append(responses, response)
         _, classNode := response.Seq, response.ClassNode
         numReads++
         if classNode != nil {
@@ -183,7 +190,6 @@ func main() {
             }
         }
     }
-    netTime := time.Since(startTime)
 
     if numReads != uint64(len(readsBytes)) {
         panic("not all reads, or too many reads, returned from RepeatGenome.GetReadClassChan()")
@@ -202,6 +208,13 @@ func main() {
         }
     }
 
+    var nonRootResps []repeatgenome.ReadResponse
+    for _, resp := range responses {
+        if resp.ClassNode != nil && resp.ClassNode.Name != "root" {
+            nonRootResps = append(nonRootResps, resp)
+        }
+    }
+
     fmt.Printf("RepeatGenome.Kmers comprises %.2f GB\n", rg.KmersGBSize())
     fmt.Println()
 
@@ -209,6 +222,8 @@ func main() {
     fmt.Printf("%.2f%% of the genome consists of repeat sequences\n", rg.PercentRepeats())
     fmt.Printf("%.2f%% of reads were classified with a repeat sequence (%s of %s)\n", 100 * (float64(numClassifiedReads) / float64(numReads)), comma(numClassifiedReads), comma(numReads))
     fmt.Printf("%.2f%% of classified reads were classified at the class tree root (%s reads)\n", 100 * (float64(rootReads) / float64(numReads)), comma(rootReads))
+    fmt.Printf("on average, a classification restricted a read's possible location to %.2f%% of the genome\n", rg.AvgPossPercentGenome(responses))
+    fmt.Printf("on average, a non-root classification restricted a read's possible location to %.2f%% of the genome\n", rg.AvgPossPercentGenome(nonRootResps))
     fmt.Println()
 
     if *verifyClass {
@@ -229,12 +244,6 @@ func main() {
             for _, readSAM := range theseReadSAMs {
                 readSAMs = append(readSAMs, readSAM)
             }
-        }
-
-        // run classification again to populate responses list
-        responses := []repeatgenome.ReadResponse{}
-        for response := range rg.GetReadClassChan(readsBytes) {
-            responses = append(responses, response)
         }
 
         seqToClass := make(map[string]*repeatgenome.ClassNode, len(responses))

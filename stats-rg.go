@@ -1,7 +1,6 @@
 package repeatgenome
 
 import (
-    "fmt"
     "unsafe"
 )
 
@@ -28,6 +27,54 @@ func (rg *RepeatGenome) PercentRepeats() float64 {
     }
 
     return 100 * (float64(repeatBases) / float64(totalBases))
+}
+
+func (repeat *Repeat) RepeatSize() uint64 {
+    var repeatSize uint64 = 0
+
+    for _, match := range repeat.Instances {
+        repeatSize += match.SeqEnd - match.SeqStart
+    }
+
+    return repeatSize
+}
+
+func (classNode *ClassNode) Size() uint64 {
+    if classNode == nil {
+        return 0
+    }
+    
+    var classNodeSize uint64 = 0
+
+    if classNode.Repeat != nil {
+        for _, match := range classNode.Repeat.Instances {
+            classNodeSize += match.SeqEnd - match.SeqStart
+        }
+    }
+
+    for _, child := range classNode.Children {
+        classNodeSize += child.Size()
+    }
+
+    return classNodeSize
+}
+
+// returns the average percent of the genome that a classified read could exist in, in regard to the supplied list of classified reads
+// uses a cumulative average to prevent overflow
+func (rg RepeatGenome) AvgPossPercentGenome(resps []ReadResponse) float64 {
+    classNodeSizes := make(map[*ClassNode]float64, len(rg.ClassTree.ClassNodes))
+    for i := range rg.ClassTree.NodesByID {
+        classNode := rg.ClassTree.NodesByID[i]
+        classNodeSizes[classNode] = float64(classNode.Size())
+    }
+
+    var classesProcessed, avgClassSize float64 = 0, 0
+    for _, resp := range resps {
+        avgClassSize += (classNodeSizes[resp.ClassNode] - avgClassSize) / (classesProcessed + 1)
+        classesProcessed++
+    }
+
+    return 100 * (avgClassSize / float64(rg.Size()))
 }
 
 // written for the PercentTrueClassification() below
@@ -62,6 +109,7 @@ func recNodeSearch(classNode *ClassNode, readSAM ReadSAM) bool {
     return false
 }
 
+/*
 func TestNodeSearch(classNode *ClassNode, readSAM ReadSAM) bool {
     if classNode == nil || (classNode.Name != "root" && classNode.Name != "Satellite" && classNode.Name != "Satellite/HETRP_DM") {
         return false
@@ -84,7 +132,6 @@ func TestNodeSearch(classNode *ClassNode, readSAM ReadSAM) bool {
                 if overlap >= uint64(rg.K) {
                     return true
                 }
-                */
             }
         }
     } else {
@@ -105,6 +152,7 @@ func TestNodeSearch(classNode *ClassNode, readSAM ReadSAM) bool {
     fmt.Println("false")
     return false
 }
+*/
 
 // we currently use the simple metric that the read and one of the repeat's instances overlap at all
 func (rg *RepeatGenome) PercentTrueClassifications(responses []ReadSAMResponse) float64 {
