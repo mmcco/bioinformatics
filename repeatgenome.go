@@ -889,7 +889,7 @@ type ReadResponse struct {
     ClassNode *ClassNode
 }
 
-func (rg *RepeatGenome) ClassifyReads(readChan chan []byte, responseChan chan ReadResponse) {
+func (rg *RepeatGenome) ClassifyReads(reads [][]byte, responseChan chan ReadResponse) {
     var kmerSet map[uint64]bool
     var byteBuf []byte
     if rg.Flags.Debug {
@@ -903,7 +903,7 @@ func (rg *RepeatGenome) ClassifyReads(readChan chan []byte, responseChan chan Re
 
 
 ReadLoop:
-    for readSeq := range readChan {
+    for _, readSeq := reads {
         k_ := int64(rg.K)
         numKmers := int64(len(readSeq)) - k_ + 1
 
@@ -943,25 +943,21 @@ ReadLoop:
 
 func (rg *RepeatGenome) GetReadClassChan(reads [][]byte) chan ReadResponse {
     // a rudimentary way of deciding how many threads to allow, should eventually be improved
-    numCPU := runtime.NumCPU()
+    numCPU := uint64(runtime.NumCPU())
     if rg.Flags.Debug {
         fmt.Printf("GetReadClassChan() using %d CPUs\n", numCPU)
     }
-    runtime.GOMAXPROCS(numCPU)
+    runtime.GOMAXPROCS(int(numCPU))
 
-    readChan := make(chan []byte, 500)  // should probably be buffered
     responseChans := make([]chan ReadResponse)      // should probably be buffered
 
-    go func() {
-        for _, read := range reads {
-            readChan <- read
-        }
-        close(readChan)
-    }()
-
-    for i := 0; i < numCPU; i++ {
+    numReads := uint64(len(reads))
+    var i uint64
+    for i = 0; i < numCPU; i++ {
         responseChans = append(responseChans, make(chan ReadResponse))
-        go rg.ClassifyReads(readChan, responseChans[i])
+        startInd := i * (numReads / numCPU)
+        endInd := ((i + 1) * numReads) / numCPU
+        go rg.ClassifyReads(reads[startInd : endInd], responseChans[i])
     }
 
     var wg sync.WaitGroup
