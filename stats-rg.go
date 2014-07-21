@@ -59,6 +59,28 @@ func (classNode *ClassNode) Size() uint64 {
     return classNodeSize
 }
 
+func (readResp ReadResponse) HangingSize() uint64 {
+    classNode := readResp.ClassNode
+    if classNode == nil {
+        return 0
+    }
+    
+    var classNodeSize uint64 = 0
+
+    if classNode.Repeat != nil {
+        for _, match := range classNode.Repeat.Instances {
+            classNodeSize += match.SeqEnd - match.SeqStart
+            // classNodeSize += 2 * (ReadResp.
+        }
+    }
+
+    for _, child := range classNode.Children {
+        classNodeSize += child.Size()
+    }
+
+    return classNodeSize
+}
+
 // returns the average percent of the genome that a classified read could exist in, in regard to the supplied list of classified reads
 // uses a cumulative average to prevent overflow
 func (rg RepeatGenome) AvgPossPercentGenome(resps []ReadResponse) float64 {

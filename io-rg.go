@@ -96,12 +96,11 @@ func (refGenome *RepeatGenome) PrintChromInfo() {
     }
 }
 
-// a saner way of doing this would be to allocate a single k-long []byte and have a function populate it before printing
 func (repeatGenome *RepeatGenome) WriteMins(minMap MinMap) error {
     k := repeatGenome.K
     m := repeatGenome.M
-    kmerBuf := make([]byte, k, k)
-    minBuf := make([]byte, m, m)
+    kmerBuf := make(TextSeq, k, k)
+    minBuf := make(TextSeq, m, m)
     filename := strings.Join([]string{repeatGenome.Name, ".mins"}, "")
     outfile, err := os.Create(filename)
     if err != nil {
@@ -187,8 +186,8 @@ func writeSeqInt(writer io.ByteWriter, seqInt uint64, seqLen uint8) error {
 }
 
 // assumes that all bytes in the slice to be filled are initialized
-// (a.k.a initialize buffer with make([]byte, k, k))
-func fillKmerBuf(slice []byte, seqInt uint64) {
+// (a.k.a initialize buffer with make(TextSeq, k, k))
+func fillKmerBuf(slice TextSeq, seqInt uint64) {
     if len(slice) > 32 {
         panic("slice of length greater than 32 passed to fillKmerBuf()")
     }

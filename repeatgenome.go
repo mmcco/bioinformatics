@@ -13,6 +13,8 @@ package repeatgenome
 
    Premature commenting is the root of all evil, and I have sinned. Please read comments skeptically - they will eventually be audited.
 
+   Should probably make a file solely for type defs.
+
    Error handling should be updated with a custom ParseError type and removal fo checkError()
 
    For portability's sake, the flags should be used as args to Generate() rather than globals.
@@ -124,7 +126,7 @@ type RepeatGenome struct {
     Flags Flags
     // maps a chromosome name to a map of its sequences
     // as discussed above, though, matches only contain 1D sequence indexes
-    chroms        map[string](map[string][]byte)
+    chroms        map[string](map[string]TextSeq)
     K             uint8
     M             uint8
     Kmers         Kmers
@@ -150,6 +152,9 @@ type ClassTree struct {
     // we explicitly create the root (because RepeatMatcher doesn't)
     Root *ClassNode
 }
+
+// Used to differentiate sequence representations with one base per byte (type TextSeq) from those with four bases per byte (type Seq).
+type TextSeq []byte
 
 // can store a kmer where k <= 32
 // the value of k is not stored in the struct, but rather in the RepeatGenome, for memory efficiency
@@ -204,7 +209,7 @@ type MinMap map[uint64]PKmers
 type Repeats []Repeat
 type Matches []Match
 
-//type Chroms map[string](map[string][]byte)
+//type Chroms map[string](map[string]TextSeq)
 
 type MinPair struct {
     KmerInt   Kmer
@@ -330,13 +335,13 @@ func parseMatches(genomeName string) (error, Matches) {
     return nil, matches
 }
 
-func parseGenome(genomeName string) (error, map[string](map[string][]byte)) {
+func parseGenome(genomeName string) (error, map[string](map[string]TextSeq)) {
     chromFileInfos, err := ioutil.ReadDir(genomeName)
     if err != nil {
         return IOError{"repeatgenome.parseGenome()", err}, nil
     }
     warned := false
-    chroms := make(map[string](map[string][]byte))
+    chroms := make(map[string](map[string]TextSeq))
     // used below to store the two keys for RepeatGenome.chroms
     for i := range chromFileInfos {
         // "my_genome_name", "my_chrom_name"  ->  "my_genome_name/my_chrom_name"
@@ -352,7 +357,7 @@ func parseGenome(genomeName string) (error, map[string](map[string][]byte)) {
 
             // maps each sequence name in this chrom to a slice of its sequence's lines
             // the list is concatenated at the end for efficiency's sake
-            seqMap := make(map[string][][]byte)
+            seqMap := make(map[string][]TextSeq)
             numLines := uint64(len(seqLines))
             var i uint64
             for i = 0; i < numLines; i++ {
@@ -372,9 +377,9 @@ func parseGenome(genomeName string) (error, map[string](map[string][]byte)) {
             }
             // finally, we insert this map into the full map
             chromName := chromFilepath[len(genomeName)+1 : len(chromFilepath)-3]
-            chroms[chromName] = make(map[string][]byte)
+            chroms[chromName] = make(map[string]TextSeq)
             for k, v := range seqMap {
-                chroms[chromName][k] = bytes.ToLower(bytes.Join(v, []byte{}))
+                chroms[chromName][k] = bytes.ToLower(bytes.Join(v, TextSeq{}))
             }
         }
     }
@@ -454,7 +459,7 @@ func (rg *RepeatGenome) RunDebugTests() {
     fmt.Println("max64(int64(5), int64(7)):", max64(int64(5), int64(7)))
     fmt.Println()
 
-    const testSeq []byte = []byte("atgtttgtgtttttcataaagacgaaagatg")
+    const testSeq TextSeq = TextSeq("atgtttgtgtttttcataaagacgaaagatg")
     offset, thisMin := getMinimizer(seqToInt(testSeq), uint8(len(testSeq)), 15)
     fmt.Println("getMinimizer('tgctcctgtcatgcatacgcaggtcatgcat', 15) offset :", offset)
     printSeqInt(thisMin, 15)
@@ -791,7 +796,7 @@ func (rg *RepeatGenome) populateKraken(minCache map[uint64]uint64, kmerMap map[u
 func (rg *RepeatGenome) numKmers() uint64 {
     var k = int(rg.K)
     var numKmers uint64 = 0
-    var seqs [][]byte
+    var seqs []TextSeq
 
     splitOnN := func(c rune) bool { return c == 'n' }
 
@@ -855,7 +860,7 @@ type SeqAndClass struct {
 
 /*
 // not that the caller is responsible for closing the channel
-func (rg *RepeatGenome) kmerSeqFeed(seq []byte) chan uint64 {
+func (rg *RepeatGenome) kmerSeqFeed(seq TextSeq) chan uint64 {
     c := make(chan uint64)
 
     go func() {
@@ -889,11 +894,11 @@ type ReadResponse struct {
     ClassNode *ClassNode
 }
 
-func (rg *RepeatGenome) ClassifyReads(reads [][]byte, responseChan chan ReadResponse) {
+func (rg *RepeatGenome) ClassifyReads(reads []TextSeq, responseChan chan ReadResponse) {
     var kmerSet map[uint64]bool
-    var byteBuf []byte
+    var byteBuf TextSeq
     if rg.Flags.Debug {
-        byteBuf = make([]byte, rg.K, rg.K)
+        byteBuf = make(TextSeq, rg.K, rg.K)
         kmerSet = make(map[uint64]bool, len(rg.Kmers))
         for _, kmer := range rg.Kmers {
             kmerSeq := *(*uint64)(unsafe.Pointer(&kmer[0]))
@@ -941,7 +946,7 @@ ReadLoop:
     close(responseChan)
 }
 
-func (rg *RepeatGenome) GetReadClassChan(reads [][]byte) chan ReadResponse {
+func (rg *RepeatGenome) GetReadClassChan(reads []TextSeq) chan ReadResponse {
     // a rudimentary way of deciding how many threads to allow, should eventually be improved
     numCPU := uint64(runtime.NumCPU())
     if rg.Flags.Debug {

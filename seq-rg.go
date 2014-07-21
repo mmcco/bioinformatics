@@ -5,7 +5,7 @@ import (
 )
 // General sequence-manipulation functions.
 
-func seqToInt(seq []byte) uint64 {
+func seqToInt(seq TextSeq) uint64 {
     if len(seq) < 1 || len(seq) > 31 {
         panic("seqToInt() can only int-ize sequences where 0 < length < 32")
     }
@@ -31,7 +31,7 @@ func seqToInt(seq []byte) uint64 {
     return seqInt
 }
 
-func revCompToInt(seq []byte) uint64 {
+func revCompToInt(seq TextSeq) uint64 {
     if len(seq) < 1 || len(seq) > 31 {
         panic("revCompToInt() can only int-ize sequences where 0 < length < 32")
     }
@@ -122,8 +122,8 @@ func getMinimizer(kmer uint64, k, m uint8) (uint8, uint64) {
     return currOffset, currMin
 }
 
-func revComp(seq []byte) []byte {
-    var revCompSeq = make([]byte, 0, len(seq))
+func revComp(seq TextSeq) TextSeq {
+    var revCompSeq = make(TextSeq, 0, len(seq))
     for i := range seq {
         switch seq[len(seq)-i-1] {
         case 'a':
@@ -147,7 +147,7 @@ func revComp(seq []byte) []byte {
 
 // The logic for determining the minimizer
 // Currently, it uses simple lexicographic ordering
-func seqLessThan(a, b []byte) bool {
+func seqLessThan(a, b TextSeq) bool {
     // min function manually inlined for speed - dubious
     var size int
     if len(a) < len(b) {
@@ -166,7 +166,7 @@ func seqLessThan(a, b []byte) bool {
     return false
 }
 
-func GetSeq(seqStr []byte) Seq {
+func GetSeq(seqStr TextSeq) Seq {
     // ceiling division of len(seqStr) by 4
     var numBytes uint64 = 1 + ((uint64(len(seqStr)) - 1) / 4)
     seq := Seq{make([]byte, numBytes, numBytes), uint64(len(seqStr))}
