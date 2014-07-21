@@ -353,13 +353,12 @@ func parseGenome(genomeName string) (error, map[string](map[string][]byte)) {
             // maps each sequence name in this chrom to a slice of its sequence's lines
             // the list is concatenated at the end for efficiency's sake
             seqMap := make(map[string][][]byte)
-            var numLines uint64 = uint64(len(seqLines))
-            var seqName string
+            numLines := uint64(len(seqLines))
             var i uint64
             for i = 0; i < numLines; i++ {
                 seqLine := bytes.TrimSpace(seqLines[i])
                 if seqLine[0] == byte('>') {
-                    seqName = string(bytes.TrimSpace(seqLine[1:]))
+                    seqName := string(bytes.TrimSpace(seqLine[1:]))
                     if !warned && seqName != chromFilename[:len(chromFilename)-3] {
                         fmt.Println("WARNING: reference genome is two-dimensional, containing sequences not named after their chromosome.")
                         fmt.Println("Because RepeatMasker supplied only one-dimensional indexing, this may cause unexpected behavior or program failure.")
@@ -438,7 +437,6 @@ func (rg *RepeatGenome) RunDebugTests() {
     }
     fmt.Println()
 
-    fmt.Println()
     fmt.Println("number of chromosomes parsed:", len(rg.chroms))
     fmt.Println()
 
@@ -456,7 +454,7 @@ func (rg *RepeatGenome) RunDebugTests() {
     fmt.Println("max64(int64(5), int64(7)):", max64(int64(5), int64(7)))
     fmt.Println()
 
-    testSeq := []byte("atgtttgtgtttttcataaagacgaaagatg")
+    const testSeq []byte = []byte("atgtttgtgtttttcataaagacgaaagatg")
     offset, thisMin := getMinimizer(seqToInt(testSeq), uint8(len(testSeq)), 15)
     fmt.Println("getMinimizer('tgctcctgtcatgcatacgcaggtcatgcat', 15) offset :", offset)
     printSeqInt(thisMin, 15)
@@ -469,7 +467,7 @@ func (rg *RepeatGenome) getRepeats() {
     // we now populate a list of unique repeat types
     // repeats are stored in the below slice, indexed by their ID
     // we first determine the necessary size of the slice - we can't use append because matches are not sorted by repeatID
-    rg.Repeats = Repeats{}
+    var rg.Repeats Repeats
 
     rg.RepeatMap = make(map[string]*Repeat)
 
@@ -482,7 +480,7 @@ func (rg *RepeatGenome) getRepeats() {
             repeat.Instances = append(repeat.Instances, match)
             match.Repeat = repeat
         } else {
-            repeat := Repeat{}
+            var repeat Repeat
             repeat.ID = uint64(len(rg.Repeats))
             repeat.ClassList = match.RepeatClass
             repeat.Name = match.RepeatName
@@ -581,9 +579,8 @@ func (cn *ClassNode) getAncestry() []*ClassNode {
 func (classTree *ClassTree) getLCA(cnA, cnB *ClassNode) *ClassNode {
     ancestryA := cnA.getAncestry()
     cnBWalker := cnB
-    var i int
     for cnBWalker != classTree.Root {
-        for i = 0; i < len(ancestryA); i++ {
+        for i := 0; i < len(ancestryA); i++ {
             if cnBWalker == ancestryA[i] {
                 return cnBWalker
             }
@@ -794,7 +791,7 @@ func (rg *RepeatGenome) populateKraken(minCache map[uint64]uint64, kmerMap map[u
 func (rg *RepeatGenome) numKmers() uint64 {
     var k = int(rg.K)
     var numKmers uint64 = 0
-    seqs := [][]byte{}
+    var seqs [][]byte
 
     splitOnN := func(c rune) bool { return c == 'n' }
 
@@ -849,22 +846,6 @@ func (rg *RepeatGenome) getKmer(kmerInt uint64) *Kmer {
     }
 
     return nil
-    /*
-    var minsKmers []Kmer = rg.Kmers[startInd:endInd]
-
-    gtEq := func(i int) bool {
-        return *(*uint64)(unsafe.Pointer(&minsKmers[i][0])) >= kmer
-    }
-
-    kmerInd := sort.Search(len(minsKmers), gtEq)
-
-    kmerVal := *(*uint64)(unsafe.Pointer(&rg.Kmers[kmerInd][0]))
-    if kmerVal == kmer {
-        return &rg.Kmers[kmerInd]
-    } else {
-        return nil
-    }
-    */
 }
 
 type SeqAndClass struct {
@@ -969,7 +950,7 @@ func (rg *RepeatGenome) GetReadClassChan(reads [][]byte) chan ReadResponse {
     runtime.GOMAXPROCS(numCPU)
 
     readChan := make(chan []byte, 500)  // should probably be buffered
-    responseChans := []chan ReadResponse{}      // should probably be buffered
+    responseChans := make([]chan ReadResponse)      // should probably be buffered
 
     go func() {
         for _, read := range reads {
