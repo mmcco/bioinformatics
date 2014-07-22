@@ -4,9 +4,8 @@ import (
     "bytes"
     "flag"
     "fmt"
+    "github.com/plsql/repeatgenome"
     "io/ioutil"
-    "jh/repeatgenome"
-    "log"
     "os"
     "runtime/pprof"
     "strconv"
@@ -74,7 +73,7 @@ func main() {
     noKraken := flag.Bool("no_kraken", false, "don't generate Kraken data structure")
     dontWriteMins := flag.Bool("no_write_kraken", false, "don't write the Kraken data to file")
     writeJSON := flag.Bool("json", false, "write JSON representation of class tree to <genomeName>.classtree.json")
-    verifyClass := flag.Bool("verify_class", false, "run classification a second time, with SAM-formatted reads, to find percent correct classification")
+    //verifyClass := flag.Bool("verify_class", false, "run classification a second time, with SAM-formatted reads, to find percent correct classification")
     k_arg := flag.Uint("k", 31, "kmer length")
     m_arg := flag.Uint("m", 15, "minimizer length")
     flag.Parse()
@@ -144,42 +143,18 @@ func main() {
     fmt.Println(comma(uint64(len(rg.Matches))), "matches")
     fmt.Println()
 
-    workingDirName, err := os.Getwd()
-    if err != nil {
-        log.Fatal(err)
-    }
-    readsDirName := workingDirName + "/" + genomeName + "-reads"
-    currDir, err := os.Open(readsDirName)
-    if err != nil {
-        log.Fatal(err)
-    }
-    fileinfos, err := currDir.Readdir(-1)
-    if err != nil {
-        log.Fatal(err)
-    }
-    processedFiles := []os.FileInfo{}
-    for _, fileinfo := range fileinfos {
-        if len(fileinfo.Name()) > 5 && fileinfo.Name()[len(fileinfo.Name())-5 : ] == ".proc" {
-            processedFiles = append(processedFiles, fileinfo)
-        }
-    }
-    readsBytes := [][]byte{}
-    for _, fileinfo := range processedFiles {
-        _, theseReadsBytes := fileLines(readsDirName + "/" + fileinfo.Name())
-        for _, bytesLine := range theseReadsBytes {
-            readsBytes = append(readsBytes, bytesLine)
-        }
-    }
-
     startTime := time.Now()
-    for _ = range rg.GetReadClassChan(readsBytes) {
-
+    err, respChan := rg.ProcessReads()
+    if err != nil {
+        panic(err)
     }
+    for _ = range respChan { }
     netTime := time.Since(startTime)
 
     var numReads, numClassifiedReads, rootReads uint64 = 0, 0, 0
     var responses []repeatgenome.ReadResponse
-    for response := range rg.GetReadClassChan(readsBytes) {
+    err, respChan = rg.ProcessReads()
+    for response := range respChan {
         responses = append(responses, response)
         _, classNode := response.Seq, response.ClassNode
         numReads++
@@ -191,13 +166,16 @@ func main() {
         }
     }
 
+    /*  deprecated by changed functions - should eventually find another way of making this check
     if numReads != uint64(len(readsBytes)) {
         panic("not all reads, or too many reads, returned from RepeatGenome.GetReadClassChan()")
     }
+    */
 
     if rg.Flags.Debug {
         classCount := make(map[*repeatgenome.ClassNode]uint64)
-        for response := range rg.GetReadClassChan(readsBytes) {
+        err, respChan = rg.ProcessReads()
+        for response := range respChan {
             if response.ClassNode != nil {
                 classCount[response.ClassNode]++
             }
@@ -226,6 +204,7 @@ func main() {
     fmt.Printf("on average, a non-root classification restricted a read's possible location to %.2f%% of the genome\n", rg.AvgPossPercentGenome(nonRootResps))
     fmt.Println()
 
+    /*
     if *verifyClass {
         fmt.Println("...using SAM-formatted reads to check classification correctness...")
         
@@ -256,46 +235,10 @@ func main() {
             readSAMResps = append(readSAMResps, repeatgenome.ReadSAMResponse{readSAM, seqToClass[string(readSAM.Seq)]})
         }
 
-        /*
-        responses := []repeatgenome.ReadSAMResponse{}
-        var numClassified = 0
-        for response := range rg.GetReadSAMClassChan(readSAMs) {
-            responses = append(responses, response)
-            if response.ClassNode != nil {
-                numClassified++
-            }
-        }
-
-        if rg.Flags.Debug {
-            for _, resp := range responses[:20] {
-                fmt.Printf("%s[%d:%d]: %s\n", resp.ReadSAM.SeqName, resp.ReadSAM.StartInd, resp.ReadSAM.StartInd + uint64(len(resp.ReadSAM.Seq)), resp.ReadSAM.Seq)
-                if resp.ClassNode != nil {
-                    fmt.Printf("%s\n\n", resp.ClassNode.Name)
-                } else {
-                    fmt.Printf("<nil>\n\n")
-                }
-            }
-            
-            for _, resp := range responses {
-                if resp.ReadSAM.SeqName == "chr2L" && resp.ReadSAM.StartInd == 84 {
-                    fmt.Println("classified as", resp.ClassNode.Name)
-                    repeatgenome.TestNodeSearch(resp.ClassNode, resp.ReadSAM)
-                    fmt.Println()
-                }
-            }
-
-            fmt.Println("Satellite/HETRP_DM instances:")
-            for _, inst := range rg.RepeatMap["Satellite/HETRP_DM"].Instances {
-                fmt.Printf("\t%s[%d:%d]\n", inst.SeqName, inst.SeqStart, inst.SeqEnd)
-            }
-            fmt.Println()
-        }
-
-        fmt.Println(numClassified, "of", len(responses), "reads classified")
-        */
         fmt.Printf("%.2f%% of classified reads overlapped an instance of their assigned repeat class\n", rg.PercentTrueClassifications(readSAMResps))
         fmt.Println()
     }
+    */
 
     fmt.Println(rg.Name, "successfully generated - exiting")
 }

@@ -1,4 +1,5 @@
 package_dir = $(GOPATH)/src/jh/repeatgenome/
+
 main: $(package_dir)repeatgenome.go $(package_dir)helper-rg.go $(package_dir)stats-rg.go $(package_dir)io-rg.go $(package_dir)seq-rg.go run-rg.go 
 	go install jh/repeatgenome
 	go build run-rg.go
