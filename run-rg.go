@@ -235,7 +235,8 @@ func main() {
             readSAMResps = append(readSAMResps, repeatgenome.ReadSAMResponse{readSAM, seqToClass[string(readSAM.Seq)]})
         }
 
-        fmt.Printf("%.2f%% of classified reads overlapped an instance of their assigned repeat class\n", rg.PercentTrueClassifications(readSAMResps))
+        fmt.Printf("%.2f%% of classified reads overlapped an instance of their assigned repeat class\n", rg.PercentTrueClassifications(readSAMResps, false))
+        fmt.Printf("%.2f%% of classified reads overlapped an instance of their assigned repeat class (strict)\n", rg.PercentTrueClassifications(readSAMResps, true))
         fmt.Println()
     }
 
