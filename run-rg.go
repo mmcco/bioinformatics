@@ -166,12 +166,6 @@ func main() {
         }
     }
 
-    fmt.Println("rootReads:", rootReads)
-    fmt.Println("rg.ClassTree.Root:", *rg.ClassTree.Root)
-    fmt.Println("rg.ClassTree.ClassNodes['root']:", rg.ClassTree.ClassNodes["root"])
-    fmt.Println("rg.ClassTree.Root.IsRoot:", rg.ClassTree.Root.IsRoot)
-    fmt.Println()
-
     /*  deprecated by changed functions - should eventually find another way of making this check
     if numReads != uint64(len(readsBytes)) {
         panic("not all reads, or too many reads, returned from RepeatGenome.GetReadClassChan()")
