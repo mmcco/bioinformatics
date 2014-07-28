@@ -61,6 +61,15 @@ func comma(v uint64) string {
 
 func main() {
 
+    /*
+    defer func() {
+        if r := recover(); r != nil {
+            fmt.Println("panic:", r)
+            os.Exit(1)
+        }
+    }()
+    */
+
     if len(os.Args) < 2 {
         fmt.Println("arg error - usage: ./minimize <flags> <reference genome dir>")
         os.Exit(1)
@@ -126,9 +135,6 @@ func main() {
     } else {
         k = uint8(*k_arg)
         m = uint8(*m_arg)
-        fmt.Println("k =", k)
-        fmt.Println("m =", m)
-        fmt.Println()
     }
 
     rgFlags := repeatgenome.Flags{*debug, *cpuProfile, *memProfile, genKraken, writeKraken, *writeJSON}
