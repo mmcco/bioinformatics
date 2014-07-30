@@ -137,13 +137,39 @@ func main() {
         m = uint8(*m_arg)
     }
 
-    rgFlags := repeatgenome.Flags{*debug, *cpuProfile, *memProfile, genKraken, writeKraken, *writeJSON}
-    err, rg := repeatgenome.Generate(genomeName, k, m, rgFlags)
+    err, rg := repeatgenome.New(repeatgenome.Config{
+        Name: genomeName,
+        K: k,
+        M: m,
+        Debug: *debug,
+        CPUProfile: *cpuProfile,
+        MemProfile: *memProfile,
+        Minimize: !*noKraken,
+    })
+
     if err != nil {
-        fmt.Println("./run-rg: RepeatGenome generation failed")
-        panic(err)
+        fmt.Println("./run-rg: RepeatGenome generation failed:")
+        fmt.Println(err)
+        os.Exit(1)
     }
 
+
+    if writeKraken {
+        err := rg.WriteKmers(rg.Name + ".mins")
+        if err != nil {
+            fmt.Println(err)
+            os.Exit(1)
+        }
+    }
+
+    if *writeJSON {
+        if err != nil {
+            fmt.Println(err)
+            os.Exit(1)
+        }
+    }
+
+    rg.WriteClassJSON(false, false)
     fmt.Println(comma(uint64(len(rg.Repeats))), "repeat types")
     fmt.Println(comma(uint64(len(rg.ClassTree.ClassNodes))), "class nodes")
     fmt.Println(comma(uint64(len(rg.Matches))), "matches")
