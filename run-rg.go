@@ -79,10 +79,10 @@ func main() {
     cpuProfile := flag.Bool("cpuprof", false, "write cpu profile to file <genomeName>.cpuprof")
     memProfile := flag.Bool("memprof", false, "write memory profile to <genomeName>.memprof")
     debug := flag.Bool("debug", false, "run and print debugging tests")
-    noKraken := flag.Bool("no_kraken", false, "don't generate Kraken data structure")
-    dontWriteMins := flag.Bool("no_write_kraken", false, "don't write the Kraken data to file")
+    dontWriteLib := flag.Bool("no_write_lib", false, "don't write the Kraken library to file")
     writeJSON := flag.Bool("json", false, "write JSON representation of class tree to <genomeName>.classtree.json")
     verifyClass := flag.Bool("verify_class", false, "run classification a second time, with SAM-formatted reads, to find percent correct classification")
+    forceGen := flag.Bool("force_gen", false, "force Kraken library generation, regardless of whether it already exists in stored form")
     k_arg := flag.Uint("k", 31, "kmer length")
     m_arg := flag.Uint("m", 15, "minimizer length")
     flag.Parse()
@@ -109,23 +109,14 @@ func main() {
         fmt.Println()
     }
 
-    genKraken := !(*noKraken)
-    writeKraken := genKraken && !*dontWriteMins
-    if !genKraken {
-        fmt.Println("Kraken data structure disabled")
-        fmt.Println()
-    } else if !writeKraken {
-        fmt.Println("Writing Kraken data to file disabled")
+    if *dontWriteLib {
+        fmt.Println("Writing Kraken library to file disabled")
         fmt.Println()
     }
 
 
-    if *writeJSON && genKraken {
+    if *writeJSON {
         fmt.Println("class tree writeJSON write enabled")
-        fmt.Println()
-    } else if *writeJSON && !genKraken {
-        fmt.Println("class tree writeJSON write enabled")
-        fmt.Println("WARNING: you are writing the class tree writeJSON without minimizing - all node sizes will be 0")
         fmt.Println()
     }
 
@@ -144,7 +135,8 @@ func main() {
         Debug: *debug,
         CPUProfile: *cpuProfile,
         MemProfile: *memProfile,
-        Minimize: !*noKraken,
+        WriteLib: !*dontWriteLib,
+        ForceGen: *forceGen,
     })
 
     if err != nil {
@@ -154,6 +146,7 @@ func main() {
     }
 
 
+    /*
     if writeKraken {
         err := rg.WriteKmers(rg.Name + ".mins")
         if err != nil {
@@ -161,6 +154,7 @@ func main() {
             os.Exit(1)
         }
     }
+    */
 
     if *writeJSON {
         if err != nil {
