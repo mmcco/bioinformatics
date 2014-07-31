@@ -145,17 +145,6 @@ func main() {
         os.Exit(1)
     }
 
-
-    /*
-    if writeKraken {
-        err := rg.WriteKmers(rg.Name + ".mins")
-        if err != nil {
-            fmt.Println(err)
-            os.Exit(1)
-        }
-    }
-    */
-
     if *writeJSON {
         if err != nil {
             fmt.Println(err)
@@ -172,7 +161,8 @@ func main() {
     startTime := time.Now()
     err, respChan := rg.ProcessReads()
     if err != nil {
-        panic(err)
+        fmt.Println(err)
+        os.Exit(1)
     }
     for _ = range respChan { }
     netTime := time.Since(startTime)
@@ -239,11 +229,16 @@ func main() {
         
         workingDirName, err := os.Getwd()
         if err != nil {
-            panic(err)
+            fmt.Println(err)
+            os.Exit(1)
         }
         readsDirName := workingDirName + "/" + rg.Name + "-reads"
 
         err, readSAMs := repeatgenome.GetReadSAMs(readsDirName)
+        if err != nil {
+            fmt.Println(err)
+            os.Exit(1)
+        }
 
         seqToClass := make(map[string]*repeatgenome.ClassNode, len(responses))
         for _, response := range responses {
