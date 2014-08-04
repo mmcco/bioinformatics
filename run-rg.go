@@ -76,15 +76,16 @@ func main() {
     }
     genomeName := os.Args[len(os.Args)-1]
 
-    cpuProfile := flag.Bool("cpuprof", false, "write cpu profile to file <genomeName>.cpuprof")
-    memProfile := flag.Bool("memprof", false, "write memory profile to <genomeName>.memprof")
-    debug := flag.Bool("debug", false, "run and print debugging tests")
-    dontWriteLib := flag.Bool("no_write_lib", false, "don't write the Kraken library to file")
-    writeJSON := flag.Bool("json", false, "write JSON representation of class tree to <genomeName>.classtree.json")
-    verifyClass := flag.Bool("verify_class", false, "run classification a second time, with SAM-formatted reads, to find percent correct classification")
-    forceGen := flag.Bool("force_gen", false, "force Kraken library generation, regardless of whether it already exists in stored form")
     k_arg := flag.Uint("k", 31, "kmer length")
     m_arg := flag.Uint("m", 15, "minimizer length")
+    forceGen := flag.Bool("force_gen", false, "force Kraken library generation, regardless of whether it already exists in stored form")
+    writeStats := flag.Bool("write_stats", false, "write various tab-delimited and JSON files representing peripheral Kraken and repeat data")
+    dontWriteLib := flag.Bool("no_write_lib", false, "don't write the Kraken library to file")
+    verifyClass := flag.Bool("verify_class", false, "run classification a second time, with SAM-formatted reads, to find percent correct classification")
+    debug := flag.Bool("debug", false, "run and print debugging tests")
+    cpuProfile := flag.Bool("cpuprof", false, "write cpu profile to file <genomeName>.cpuprof")
+    memProfile := flag.Bool("memprof", false, "write memory profile to <genomeName>.memprof")
+    //useRoot := flag.Bool("use_root", false, "include kmers with root as their LCA in the Kraken DB, and return root read classifications rather than nil")
     flag.Parse()
 
     if *cpuProfile {
@@ -115,11 +116,6 @@ func main() {
     }
 
 
-    if *writeJSON {
-        fmt.Println("class tree writeJSON write enabled")
-        fmt.Println()
-    }
-
     var k, m uint8
     if *k_arg > 255 || *m_arg > 255 {
         panic("k and m must be >= 255")
@@ -137,6 +133,7 @@ func main() {
         MemProfile: *memProfile,
         WriteLib: !*dontWriteLib,
         ForceGen: *forceGen,
+        WriteStats: *writeStats,
     })
 
     if err != nil {
@@ -145,14 +142,6 @@ func main() {
         os.Exit(1)
     }
 
-    if *writeJSON {
-        if err != nil {
-            fmt.Println(err)
-            os.Exit(1)
-        }
-    }
-
-    rg.WriteClassJSON(false, false)
     fmt.Println(comma(uint64(len(rg.Repeats))), "repeat types")
     fmt.Println(comma(uint64(len(rg.ClassTree.ClassNodes))), "class nodes")
     fmt.Println(comma(uint64(len(rg.Matches))), "matches")
@@ -214,7 +203,7 @@ func main() {
     fmt.Printf("RepeatGenome.Kmers comprises %.2f GB\n", rg.KmersGBSize())
     fmt.Println()
 
-    fmt.Printf("%.2f thousand reads processed per minute\n", (float64(numReads) / 1000) / netTime.Minutes())
+    fmt.Printf("%.2f million reads processed per minute\n", (float64(numReads) / 1000000) / netTime.Minutes())
     fmt.Printf("%.2f%% of the genome consists of repeat sequences\n", rg.PercentRepeats())
     fmt.Printf("%.2f%% of reads were classified with a repeat sequence (%s of %s)\n", 100 * (float64(numClassifiedReads) / float64(numReads)), comma(numClassifiedReads), comma(numReads))
     fmt.Printf("%.2f%% of classified reads were classified at the class tree root (%s reads)\n", 100 * (float64(rootReads) / float64(numReads)), comma(rootReads))
@@ -247,12 +236,17 @@ func main() {
 
         readSAMResps := []repeatgenome.ReadSAMResponse{}
         for _, readSAM := range readSAMs {
+            if _, exists := seqToClass[string(readSAM.Seq)]; !exists {
+                fmt.Println(string(readSAM.Seq), "present in ReadSAM but not Read")
+                os.Exit(1)
+            }
             readSAMResps = append(readSAMResps, repeatgenome.ReadSAMResponse{readSAM, seqToClass[string(readSAM.Seq)]})
         }
 
+        fmt.Println("parsed", len(readSAMResps), "ReadSAMResponses")
+
         fmt.Printf("%.2f%% of classified reads overlapped an instance of their assigned repeat class\n", rg.PercentTrueClassifications(readSAMResps, false))
-        fmt.Printf("%.2f%% of classified reads overlapped an instance of their assigned repeat class (strict)\n", rg.PercentTrueClassifications(readSAMResps, true))
-        fmt.Println()
+        fmt.Printf("%.2f%% of classified reads overlapped an instance of their assigned repeat class (strict)\n\n", rg.PercentTrueClassifications(readSAMResps, true))
     }
 
     fmt.Println(rg.Name, "successfully generated - exiting")
