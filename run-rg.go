@@ -85,6 +85,7 @@ func main() {
     debug := flag.Bool("debug", false, "run and print debugging tests")
     cpuProfile := flag.Bool("cpuprof", false, "write cpu profile to file <genomeName>.cpuprof")
     memProfile := flag.Bool("memprof", false, "write memory profile to <genomeName>.memprof")
+    lcaClassify := flag.Bool("lca_classify", false, "use the LCA of all recognized kmers' classes as a read's classification")
     //useRoot := flag.Bool("use_root", false, "include kmers with root as their LCA in the Kraken DB, and return root read classifications rather than nil")
     flag.Parse()
 
@@ -147,18 +148,29 @@ func main() {
     fmt.Println(comma(uint64(len(rg.Matches))), "matches")
     fmt.Println()
 
-    startTime := time.Now()
-    err, respChan := rg.ProcessReads()
+    if *lcaClassify {
+        fmt.Println("using LCA logic to classify reads")
+        fmt.Println()
+    }
+
+    err, reads := rg.GetSAMReads()
     if err != nil {
         fmt.Println(err)
         os.Exit(1)
     }
+    respChan := rg.GetClassChan(reads, *lcaClassify)
+    startTime := time.Now()
     for _ = range respChan { }
     netTime := time.Since(startTime)
 
     var numReads, numClassifiedReads, rootReads uint64 = 0, 0, 0
     var responses []repeatgenome.ReadResponse
-    err, respChan = rg.ProcessReads()
+    err, reads = rg.GetSAMReads()
+    if err != nil {
+        fmt.Println(err)
+        os.Exit(1)
+    }
+    respChan = rg.GetClassChan(reads, *lcaClassify)
     for response := range respChan {
         responses = append(responses, response)
         _, classNode := response.Seq, response.ClassNode
