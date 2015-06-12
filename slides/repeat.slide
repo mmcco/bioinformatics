@@ -46,7 +46,7 @@ https://github.com/plsql
 .image match-size-histogram.svg
 
 
-* Golang?! Why?
+* Why Golang?
 
 - new systems language
 - by Google, but open source
@@ -55,7 +55,14 @@ https://github.com/plsql
 - bounds checking by default
 - no pointer arithmetic (unless you _really_ want it)
 - native concurrency
-- supported by GCC, easily linkable with C/C++ (e.g. the Tuxedo suite)
+
+
+* Go and GCC
+- GCC is the canonical C and C++ compiler
+- it now also compiles Go
+- they can be easily cross-linked - functions can be shared
+- we could link repeat-handling functions into the Tuxedo suite
+- GCC binaries for our code is slow - threading?
 
 
 * Quick concurrency examples
@@ -73,13 +80,23 @@ The builtin type *chan*, for _channel_, is used to communicate between threads.
 
 Kind of like a queue with a semaphore.
 
+
+* Leafless phylogeny tree for dm3 (fruit fly)
+
+.html slides-tree.html
+
+
+* Javascript tools
+
+- d3.js
+- jQuery
+- lots of Firebug
+
+
 * Kraken approach
 
 - we are currently using the Kraken algorithm
 - the first step is to create a tree of all repeat types...
-
-* Leafless phylogeny tree for dm3 (fruit fly)
-.html slides-tree.html
 
 
 * Kraken cont'd
